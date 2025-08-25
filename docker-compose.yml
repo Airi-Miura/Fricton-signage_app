@@ -1,0 +1,69 @@
+services:
+  db:
+    image: postgres:16
+    container_name: fs-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: appdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d appdb -h 127.0.0.1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  adminer:
+    image: adminer:latest
+    container_name: fs-adminer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: ./app        
+    container_name: fs-api
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: appdb
+      DB_USER: app
+      DB_PASS: secret
+      ADMIN_SEED: "admin:Temp#1234,Admin User,admin"
+      JWT_SECRET: "change_me_please"
+      API_ORIGIN: "http://localhost:8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  front:
+    build: ./front         
+    container_name: fs-front
+    restart: unless-stopped
+    ports:
+      - "3000:80"          
+    depends_on:
+      - api
+
+  front_copy:
+    build: ./front_copy
+    container_name: fs-front_copy
+    restart: unless-stopped
+    ports:
+      - "3002:80"
+    depends_on: 
+      - api
+
+
+volumes:
+  dbdata:
