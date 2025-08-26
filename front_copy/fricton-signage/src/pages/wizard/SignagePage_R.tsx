@@ -34,7 +34,7 @@ function startOfWeek(anchor: Date, mondayStart = false) {
   return d;
 }
 
-export default function TVPage_R() {
+export default function SignagePage_R() {
   const [anchorDate, setAnchorDate] = useState<Date>(() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
@@ -55,7 +55,7 @@ export default function TVPage_R() {
     const qs = new URLSearchParams({
       start: toISODate(start),
       end: toISODate(end),
-      kind: KIND,
+      kind: "配置型サイネージ",
     });
 
     const ctrl = new AbortController();
