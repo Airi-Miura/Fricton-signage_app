@@ -9,19 +9,20 @@ import AllPost from "./wizard/AllPost"; // ← 一括配信
 // Kind に "一括配信" を足したローカル型
 type ExtKind = Kind | "一括配信";
 
-type State = { kind: ExtKind; title: string };
+// location.state は kind のみ
+type State = { kind: ExtKind };
 
 export default function Wizard() {
   const { state } = useLocation() as { state?: State };
   if (!state) return <Navigate to="/" replace />;
 
-  const { kind, title } = state;
+  const { kind } = state;
 
   // 一括配信を最優先
-  if (kind === "一括配信") return <AllPost title={title} />;
-  if (kind === "大型ビジョン") return <TVForm title={title} />;
-  if (kind === "サイネージ") return <SignagePage title={title} />;
-  if (kind === "アドトラック") return <TruckPage title={title} />;
+  if (kind === "一括配信") return <AllPost />;
+  if (kind === "大型ビジョン") return <TVForm />;
+  if (kind === "サイネージ") return <SignagePage />;
+  if (kind === "アドトラック") return <TruckPage />;
 
   return <Navigate to="/" replace />;
 }

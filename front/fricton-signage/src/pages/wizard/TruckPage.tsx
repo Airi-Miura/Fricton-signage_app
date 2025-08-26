@@ -2,9 +2,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-type Props = {
-  title?: string; // ← オプショナルに
-};
+const API_ROOT = "http://localhost:8000";
+const BOOKED_API = `${API_ROOT}/api/truck/booked`;
 
 // 推奨サイズ（画像）
 const REQUIRED_W_Truck = 890;
@@ -23,33 +22,17 @@ type AudioPreview = { name: string; url: string; duration: number };
 // テンプレ定義
 type TextAlign = "left" | "center" | "right";
 type VAlign = "top" | "middle" | "bottom";
-
 type TextBox = {
-  key: string;           // 例: "title"
-  label: string;         // 入力ラベル表示
-  x: number;             // left %（0-100）
-  y: number;             // top %（0-100）
-  w: number;             // width %（0-100）
-  h: number;             // height %（0-100）
-  align?: TextAlign;     // 水平整列
-  valign?: VAlign;       // 垂直整列
-  color?: string;
-  fontSize?: number;     // px
-  weight?: 400 | 600 | 700 | 800;
-  lines?: number;        // 最大行数（CSS line-clamp）
-  required?: boolean;    // 未入力不可にするか
+  key: string; label: string; x: number; y: number; w: number; h: number;
+  align?: TextAlign; valign?: VAlign; color?: string; fontSize?: number; weight?: 400 | 600 | 700 | 800;
+  lines?: number; required?: boolean;
 };
-
-type ImageBox = {
-  x: number; y: number; w: number; h: number; mode: "cover" | "contain";
-};
-
+type ImageBox = { x: number; y: number; w: number; h: number; mode: "cover" | "contain" };
 type Template = {
-  id: string;
-  name: string;
-  background: { type: "image"; value: string }; // 画像は public 配下に置く
-  imageBox: ImageBox;              // ユーザー画像の表示領域
-  textBoxes: TextBox[];            // テキスト枠
+  id: string; name: string;
+  background: { type: "image"; value: string };
+  imageBox: ImageBox;
+  textBoxes: TextBox[];
 };
 
 // サンプルテンプレ3種
@@ -62,7 +45,7 @@ const TEMPLATES: Template[] = [
     textBoxes: [
       { key: "title", label: "タイトル", x: 5, y: 5, w: 85, h: 30, align: "left", valign: "top", color: "#ffffff", fontSize: 36, weight: 700, lines: 2, required: true },
       { key: "body", label: "本文", x: 6, y: 34, w: 52, h: 55, align: "left", valign: "top", color: "#cbd5e1", fontSize: 18, weight: 400, lines: 3 },
-      { key: "footer", label: "フッター",x: 5, y: 70, w: 85, h: 20, align: "center", valign: "top", color: "#cbd5e1", fontSize: 18, weight: 400, lines: 1 }
+      { key: "footer", label: "フッター", x: 5, y: 70, w: 85, h: 20, align: "center", valign: "top", color: "#cbd5e1", fontSize: 18, weight: 400, lines: 1 }
     ]
   },
   {
@@ -72,35 +55,39 @@ const TEMPLATES: Template[] = [
     imageBox: { x: 0, y: 0, w: 100, h: 100, mode: "cover" },
     textBoxes: [
       { key: "title", label: "タイトル", x: 5, y: 20, w: 85, h: 30, align: "left", valign: "top", color: "#ffffff", fontSize: 36, weight: 700, lines: 2, required: true },
-      { key: "footer", label: "フッター",x: 5, y: 70, w: 85, h: 20, align: "center", valign: "top", color: "#cbd5e1", fontSize: 18, weight: 400, lines: 1 }
+      { key: "footer", label: "フッター", x: 5, y: 70, w: 85, h: 20, align: "center", valign: "top", color: "#cbd5e1", fontSize: 18, weight: 400, lines: 1 }
     ]
   },
   {
     id: "two-columns",
-    name: "タイトル（左上）、サブタイトル（左上）、フッダー（右下）",
+    name: "タイトル（左上）、サブタイトル（左上）、フッター（右下）",
     background: { type: "image", value: "/signage_sample3_resized.png" },
     imageBox: { x: 0, y: 0, w: 100, h: 100, mode: "cover" },
     textBoxes: [
       { key: "title", label: "タイトル", x: 5, y: 12, w: 55, h: 40, align: "center", valign: "top", color: "#ffffff", fontSize: 36, weight: 700, lines: 2, required: true },
       { key: "subtitle", label: "サブタイトル", x: 6, y: 50, w: 50, h: 20, align: "center", valign: "top", color: "#cbd5e1", fontSize: 15, weight: 400, lines: 1 },
-      { key: "footer", label: "フッター",x: 70, y: 70, w: 35, h: 20, align: "right", valign: "top", color: "#cbd5e1", fontSize: 15, weight: 400, lines: 3 }
+      { key: "footer", label: "フッター", x: 70, y: 70, w: 35, h: 20, align: "right", valign: "top", color: "#cbd5e1", fontSize: 15, weight: 400, lines: 3 }
     ]
   }
 ];
-
 
 // 30分スロット生成
 function createTimeSlots(stepMin = 30, startHour = 8, endHour = 22) {
   const list: string[] = [];
   for (let h = startHour; h <= endHour; h++) {
     for (let m = 0; m < 60; m += stepMin) {
-      list.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
+      const hh = String(h).padStart(2, "0");
+      const mm = String(m).padStart(2, "0");
+      list.push(`${hh}:${mm}`);
     }
   }
   return list;
 }
+
 function toISODate(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
 }
 function startOfWeek(anchor: Date, mondayStart = false) {
   const d = new Date(anchor);
@@ -118,32 +105,72 @@ const fmtDuration = (sec: number) => {
 };
 
 // --- コンポーネント本体 ---
-export default function TruckPage({ title }: Props) {
+export default function TruckPage() {
   const nav = useNavigate();
 
   // 週表示
   const [anchorDate, setAnchorDate] = useState<Date>(() => {
-    const d = new Date(); d.setHours(0,0,0,0); return d;
+    const d = new Date(); 
+    d.setHours(0,0,0,0); 
+    return d;
   });
   const mondayStart = false;
-  const weekDays = useMemo(() => {
-    const start = startOfWeek(anchorDate, mondayStart);
-    return Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(start); d.setDate(start.getDate() + i); return d;
-    });
-  }, [anchorDate, mondayStart]);
-  const fmtWeekday = useMemo(() => new Intl.DateTimeFormat("ja-JP", { weekday: "short" }), []);
-  const fmtMonthDay = useMemo(() => new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric" }), []);
-  const slots = useMemo(() => createTimeSlots(30, 8, 22), []);
+    const weekDays = useMemo(() => {
+      const start = startOfWeek(anchorDate, mondayStart);
+      return Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(start);
+        d.setDate(start.getDate() + i);
+        return d;
+      });
+    }, [anchorDate, mondayStart]);
 
-  // ★ダミー予約（以前のコードで使っていた booked が未定義だったので戻しました）
-  const booked = useMemo(() => {
-    const s = new Set<string>();
-    const day0 = toISODate(weekDays[0]);
-    s.add(`${day0}_10:00`);
-    s.add(`${day0}_10:30`);
-    return s;
-  }, [weekDays]);
+  const fmtWeekday = useMemo(() => new Intl.DateTimeFormat("ja-JP", { weekday: "short" }), []);
+  const fmtMonthDay = useMemo(
+      () => new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric" }),
+      []
+    );
+  const slots = useMemo(() => createTimeSlots(30, 8, 22), []);
+  const dayISO = weekDays.map(d => toISODate(d));
+
+  // ===== APIから予約取得（SignagePage準拠 / kind=アドトラック） =====
+  const [booked, setBooked] = useState<Set<string>>(new Set());
+  const [bookedLoading, setBookedLoading] = useState(false);
+  const [bookedError, setBookedError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const start = startOfWeek(anchorDate, mondayStart);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+
+    const qs = new URLSearchParams({
+      start: toISODate(start),
+      end: toISODate(end),
+      kind: "トラック",
+    });
+
+    const ctrl = new AbortController();
+    setBookedLoading(true);
+    setBookedError(null);
+
+    fetch(`${BOOKED_API}?${qs.toString()}`, { signal: ctrl.signal })
+      .then(async res => {
+        const text = await res.text();
+        if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+        const json: Record<string, string[]> = text ? JSON.parse(text) : {};
+        const s = new Set<string>();
+        Object.entries(json).forEach(([d, times]) => (times || []).forEach(t => s.add(`${d}_${t}`)));
+        setBooked(s);
+      })
+      .catch(err => {
+        if ((err as any).name === "AbortError") return;
+        console.error("Failed to fetch booked slots:", err);
+        setBooked(new Set()); // フォールバック：全て未予約扱い
+        setBookedError("予約状況の取得に失敗しました");
+      })
+      .finally(() => setBookedLoading(false));
+
+    return () => ctrl.abort();
+  }, [anchorDate, mondayStart]);
 
   // テンプレ選択＆テキスト
   const [tplId, setTplId] = useState<string>(TEMPLATES[0].id);
@@ -157,11 +184,13 @@ export default function TruckPage({ title }: Props) {
     });
   }, [currentTpl]);
 
-  // アップロード
-  const [imageFiles, setImageFiles] = useState<FileList | null>(null); // 画像（複数）
-  const [audioFile, setAudioFile] = useState<File | null>(null);       // 音声（単一）
+  // アップロード（画像 複数 / 音声 任意 単一）
+  const [otherFiles, setOtherFiles] = useState<string[]>([]);
+  const [imageFiles, setImageFiles] = useState<FileList | null>(null);
+  const [audioFile, setAudioFile] = useState<File | null>(null);
   const [imgPreviews, setImgPreviews] = useState<ImgPreview[]>([]);
   const [audioPreview, setAudioPreview] = useState<AudioPreview | null>(null);
+
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -171,9 +200,6 @@ export default function TruckPage({ title }: Props) {
   const [dragMode, setDragMode] = useState<"select" | "deselect" | null>(null);
   const [dragStart, setDragStart] = useState<{ day: number; slot: number } | null>(null);
   const [dragPreview, setDragPreview] = useState<Set<string>>(new Set());
-
-  // プレビュー：表示中の画像index（手動切替）
-  const [activeImgIndex, setActiveImgIndex] = useState(0);
 
   // --- ドラッグ選択ハンドラ ---
   useEffect(() => {
@@ -235,7 +261,7 @@ export default function TruckPage({ title }: Props) {
       for (let d = minD; d <= maxD; d++) {
         for (let s = minS; s <= maxS; s++) {
           const k = keyOf(d, s);
-          if (!booked.has(k)) set.add(k);
+          if (!booked.has(k)) set.add(k); // 予約済みを除外
         }
       }
       setDragPreview(set);
@@ -252,59 +278,52 @@ export default function TruckPage({ title }: Props) {
 
   // --- 画像プレビュー生成（タイプ制限＆実寸チェック） ---
   useEffect(() => {
-    // 既存URLを解放
     setImgPreviews(prev => {
       prev.forEach(p => URL.revokeObjectURL(p.url));
       return [];
     });
+    setOtherFiles([]);
 
     if (!imageFiles || imageFiles.length === 0) return;
 
     const imgs: ImgPreview[] = [];
+    const others: string[] = [];
     const tasks: Promise<void>[] = [];
 
     Array.from(imageFiles).forEach(file => {
       const typeOk = ALLOWED_IMAGE_TYPES.includes(file.type);
-      const url = URL.createObjectURL(file);
-      tasks.push(
-        new Promise<void>(resolve => {
-          const img = new Image();
-          img.onload = () => {
-            const w = img.naturalWidth;
-            const h = img.naturalHeight;
-            imgs.push({
-              name: file.name,
-              url,
-              width: w,
-              height: h,
-              ok: w === REQUIRED_W_Truck && h === REQUIRED_H_Truck, // 推奨サイズ一致チェック
-              typeOk,
-            });
-            resolve();
-          };
-          img.onerror = () => {
-            imgs.push({
-              name: file.name,
-              url,
-              width: 0,
-              height: 0,
-              ok: false,
-              typeOk, // ← 必須（型に合わせる）
-            });
-            resolve();
-          };
-          img.src = url;
-        })
-      );
-    });
+      if (file.type.startsWith("image/")) {
+        const url = URL.createObjectURL(file);
+        tasks.push(
+          new Promise<void>(resolve => {
+            const img = new Image();
+            img.onload = () => {
+              const w = img.naturalWidth;
+              const h = img.naturalHeight;
+              imgs.push({ name: file.name, url, width: w, height: h, ok: w === REQUIRED_W_Truck && h === REQUIRED_H_Truck, typeOk });
+              resolve();
+            };
+            img.onerror = () => { 
+              imgs.push({ name: file.name, url, width: 0, height: 0, ok: false, typeOk }); 
+              resolve(); 
+            };
+            img.src = url;
+          })
+        );
+      }else {
+          others.push(file.name);
+        }
+      });
 
     Promise.all(tasks).then(() => {
       imgs.sort((a, b) => a.name.localeCompare(b.name));
       setImgPreviews(imgs);
-      setActiveImgIndex(0);
+      setOtherFiles(others);
     });
 
-    return () => { imgs.forEach(p => URL.revokeObjectURL(p.url)); };
+    return () => { 
+      imgs.forEach(p => URL.revokeObjectURL(p.url));
+    };
   }, [imageFiles]);
 
   // --- 音声プレビュー生成（単一） ---
@@ -323,44 +342,27 @@ export default function TruckPage({ title }: Props) {
     return () => { mounted = false; URL.revokeObjectURL(url); };
   }, [audioFile]);
 
-  //テキスト枠の CSS 生成（配置＆整列のみ。文字サイズは中のdivで調整）
-  // テキスト枠の CSS（配置＆整列）
-const textBoxStyle = (tb: TextBox): React.CSSProperties => {
-  const justifyContent =
-    tb.valign === "middle" ? "center" :
-    tb.valign === "bottom" ? "flex-end" : "flex-start";
-  const alignItems =
-    tb.align === "center" ? "center" :
-    tb.align === "right" ? "flex-end" : "flex-start";
-  return {
-    position: "absolute",
-    left: `${tb.x}%`,
-    top: `${tb.y}%`,
-    width: `${tb.w}%`,
-    height: `${tb.h}%`,
-    display: "flex",
-    justifyContent,
-    alignItems,
-    padding: 8,
-    color: tb.color ?? "#fff",
-    fontWeight: tb.weight ?? 600,
-    lineHeight: 1.2,
-    textAlign: tb.align ?? "left",
-    overflow: "hidden",
-    wordBreak: "break-word",
-    pointerEvents: "none",
+  // テキスト枠の CSS
+  const textBoxStyle = (tb: TextBox): React.CSSProperties => {
+    const justifyContent = tb.valign === "middle" ? "center" : tb.valign === "bottom" ? "flex-end" : "flex-start";
+    const alignItems = tb.align === "center" ? "center" : tb.align === "right" ? "flex-end" : "flex-start";
+    return {
+      position: "absolute",
+      left: `${tb.x}%`, top: `${tb.y}%`, width: `${tb.w}%`, height: `${tb.h}%`,
+      display: "flex", justifyContent, alignItems, padding: 8,
+      color: tb.color ?? "#fff", fontWeight: tb.weight ?? 600, lineHeight: 1.2, textAlign: tb.align ?? "left",
+      overflow: "hidden", wordBreak: "break-word", pointerEvents: "none",
+    };
   };
-};
-
 
   // プレビュー表示中の画像URL
+  const [activeImgIndex, setActiveImgIndex] = useState(0);
   const activeImgUrl = imgPreviews[activeImgIndex]?.url;
 
   // --- 送信 ---
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-
 
     // スケジュール選択チェック
     if (pickedSlots.size === 0) {
@@ -383,62 +385,63 @@ const textBoxStyle = (tb: TextBox): React.CSSProperties => {
       setError(`必須テキスト（${missing.map(m => m.label).join("、")}）を入力してください`);
       return;
     }
+    // 予約重複チェック（SignagePage準拠）
+    const conflicts = Array.from(pickedSlots).filter(k => booked.has(k));
+    if (conflicts.length > 0) {
+      setError("既に予約済みの時間帯が含まれています。別の時間を選んでください。");
+      return;
+    }
 
-    // day -> times[] へ整形
-    const byDate: Record<string, string[]> = {};
-    Array.from(pickedSlots).forEach(k => {
-      const [d, t] = k.split("_");
-      (byDate[d] ??= []).push(t);
-    });
-
-    // 送信（multipart/form-data）
-    const fd = new FormData();
-    fd.append("kind", "アドトラック");
-    fd.append("title", title ?? "");
-    fd.append("tpl_id", tplId);
-    fd.append("text_values", JSON.stringify(textValues));
-    fd.append("schedule", JSON.stringify(byDate));
-    // 画像（複数）
-    Array.from(imageFiles).forEach(f => fd.append("files_trucks", f));
-    // 音声（任意）
-    if (audioFile) fd.append("audio", audioFile);
-
-
+    
     setLoading(true);
     try {
-    // RegisterPage.tsxに極力寄せて、ファイル対応だけ追加
-    // byDate は pickedSlots から作る想定
-    const byDate: Record<string, string[]> = {};
-    Array.from(pickedSlots).forEach(k => {
-      const [d, t] = k.split("_");
-      (byDate[d] ??= []).push(t);
-    });
+      const byDate: Record<string, string[]> = {};
+      Array.from(pickedSlots).forEach(k => {
+        const [d, t] = k.split("_");
+        (byDate[d] ??= []).push(t);
+      });
 
-    // ★ Content-Type は絶対に自分で付けない（ブラウザが boundary 付きで付与する）
-    const res = await fetch("http://localhost:8000/api/trucks", {
-      method: "POST",
-      body: fd,
-    });
+      // 送信（multipart/form-data）
+      const fd = new FormData();
+      fd.append("kind", "トラック");
+      fd.append("tpl_id", tplId);
+      fd.append("text_values", JSON.stringify(textValues));
+      fd.append("schedule", JSON.stringify(byDate));
+      Array.from(imageFiles).forEach(f => fd.append("files_trucks", f));
+      if (audioFile) fd.append("audio", audioFile); // 音声は固有機能として維持
 
-    const txt = await res.text();                 // デバッグ出力（必要なら JSON にパース）
-    console.log("POST /api/trucks ->", res.status, txt);
-      if (!res.ok) throw new Error(txt || `HTTP ${res.status}`);
+      const res = await fetch(`${API_ROOT}/api/trucks`, { 
+        method: "POST", 
+        body: fd 
+      });
+
+      const txt = await res.text();
+      console.log("POST /api/signage ->", res.status, txt);
+      if (!res.ok) {
+        // サーバ側の409もここに来る
+        let detail = "";
+        try {
+          const j = JSON.parse(txt);
+          if (j?.detail) detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+        } catch {}
+        throw new Error(detail || txt || `HTTP ${res.status}`);
+      }
 
       alert("送信しました！");
-    } catch (err) {
+      // 同週で再フェッチ（即グレー反映）＆選択クリア
+      setAnchorDate(d => new Date(d));
+      setPickedSlots(new Set());
+    } catch (err: any) {
       console.error(err);
-      setError("送信に失敗しました。もう一度お試しください。");
+      setError(err?.message || "送信に失敗しました。もう一度お試しください。");
     } finally {
       setLoading(false);
     }
-    }
-
-  const dayISO = weekDays.map(d => toISODate(d));
+  }
 
   return (
     <div style={{ maxWidth: 1000, margin: "24px auto", padding: 16 }}>
       <h2>アドトラック</h2>
-      <div style={{ opacity: 0.7, marginBottom: 8 }}>タイトル：{title}</div>
 
       {/* 0) テンプレ選択 */}
       <h3 style={{ marginTop: 8 }}>テンプレートを選択</h3>
@@ -450,42 +453,16 @@ const textBoxStyle = (tb: TextBox): React.CSSProperties => {
               key={t.id}
               style={{
                 border: tplId === t.id ? "2px solid #2563eb" : "1px solid #ddd",
-                background: "#fff",
-                borderRadius: 12,
-                overflow: "hidden",
-                cursor: "pointer",
-                display: "flex",
-                flexDirection: "column"
+                background: "#fff", borderRadius: 12, overflow: "hidden",
+                cursor: "pointer", display: "flex", flexDirection: "column"
               }}
             >
-              <input
-                type="radio"
-                name="tpl"
-                value={t.id}
-                checked={tplId === t.id}
-                onChange={() => setTplId(t.id)}
-                style={{ display: "none" }}
-              />
+              <input type="radio" name="tpl" value={t.id} checked={tplId === t.id} onChange={() => setTplId(t.id)} style={{ display: "none" }} />
               <div style={{ width: "100%", aspectRatio: "16/9" }}>
                 {previewUrl ? (
-                  <img
-                    src={previewUrl}
-                    alt={t.name}
-                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                  />
+                  <img src={previewUrl} alt={t.name} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                 ) : (
-                  <div
-                    style={{
-                      width: "100%",
-                      height: "100%",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      background: "#f3f4f6",
-                      color: "#6b7280",
-                      fontSize: 12
-                    }}
-                  >
+                  <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#f3f4f6", color: "#6b7280", fontSize: 12 }}>
                     No preview
                   </div>
                 )}
@@ -499,14 +476,14 @@ const textBoxStyle = (tb: TextBox): React.CSSProperties => {
       {/* 1) 画像/音声アップロード */}
       <h3 style={{ marginTop: 20 }}>素材アップロード</h3>
       <div style={{ display: "grid", gap: 12, marginTop: 8 }}>
-        {/* 画像（複数・動画不可） */}
         <label>
           画像ファイル（複数可・推奨サイズ {REQUIRED_W_Truck}×{REQUIRED_H_Truck} ・形式：jpg/jpeg/png/webp）
           <input
             type="file"
             accept="image/jpeg,image/png,image/webp"
             multiple
-            onChange={e => { setImageFiles(e.target.files ?? null); setError(""); }}
+            onChange={e => { 
+              setImageFiles(e.target.files ?? null); setError(""); }}
             style={{ display: "block", marginTop: 6 }}
           />
         </label>
@@ -591,11 +568,7 @@ const textBoxStyle = (tb: TextBox): React.CSSProperties => {
       >
         {/* 背景画像 */}
         {currentTpl.background.type === "image" && (
-          <img
-            src={currentTpl.background.value}
-            alt="背景"
-            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
-          />
+          <img src={currentTpl.background.value} alt="背景" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
         )}
 
         {/* 画像枠：アップロード画像を1枚だけ表示（手動切替対応） */}
@@ -615,42 +588,39 @@ const textBoxStyle = (tb: TextBox): React.CSSProperties => {
             <img
               src={activeImgUrl}
               alt="メイン画像"
-              style={{
-                width: "100%",
-                height: "100%",
-                objectFit: currentTpl.imageBox.mode,
-                objectPosition: "center",
-              }}
+              style={{ width: "100%", height: "100%", objectFit: currentTpl.imageBox.mode, objectPosition: "center" }}
             />
           </div>
         )}
 
         {/* テキスト枠 */}
         {currentTpl.textBoxes.map(tb => {
-          const rawText = (textValues[tb.key] ?? "");           // ← 表示はtrimしない
-          const isEmpty = !rawText.trim() && tb.required;       // ← 必須判定はtrimで
+          const rawText = (textValues[tb.key] ?? "");
+          const isEmpty = !rawText.trim() && tb.required;
           return (
-          <div key={tb.key} style={textBoxStyle(tb)}>
-            <div
-              style={{
-                width: "100%",
-                height: "100%",
-                overflow: "hidden",
-                // -webkit-line-clamp を有効化
-                display: "-webkit-box" as unknown as React.CSSProperties["display"],
-                WebkitBoxOrient: "vertical" as any,
-                WebkitLineClamp: (tb.lines ?? 2) as any,
-                // 改行(\n)と複数スペースをそのまま表示
-                whiteSpace: "pre-wrap",
-                fontSize: ((isEmpty ? 25 : tb.fontSize) ?? 16),
-                color: ((isEmpty ? "#ff6666" : tb.color) ?? "#fff"),
-              }}
-            >
-              {isEmpty ? "（未入力）" : rawText}
+            <div key={tb.key} style={textBoxStyle(tb)}>
+              <div
+                style={{
+                  width: "100%", height: "100%", overflow: "hidden",
+                  display: "-webkit-box" as unknown as React.CSSProperties["display"],
+                  WebkitBoxOrient: "vertical" as any,
+                  WebkitLineClamp: (tb.lines ?? 2) as any,
+                  whiteSpace: "pre-wrap",
+                  fontSize: ((isEmpty ? 25 : tb.fontSize) ?? 16),
+                  color: ((isEmpty ? "#ff6666" : tb.color) ?? "#fff"),
+                }}
+              >
+                {isEmpty ? "（未入力）" : rawText}
+              </div>
             </div>
-          </div>
           );
         })}
+        {/* それ以外のファイル */}
+        {otherFiles.length > 0 && (
+          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
+            画像/動画以外の選択：{otherFiles.join(", ")}
+          </div>
+        )}
       </div>
 
       {/* 4) 配信スケジュール（週グリッド） */}
@@ -662,6 +632,8 @@ const textBoxStyle = (tb: TextBox): React.CSSProperties => {
         <div style={{ marginLeft: 8, opacity: 0.8 }}>
           週の開始日：{fmtMonthDay.format(startOfWeek(anchorDate, mondayStart))}
         </div>
+        {bookedLoading && <div style={{ marginLeft: 12, fontSize: 12, opacity: 0.8 }}>予約状況を取得中…</div>}
+        {bookedError && <div style={{ marginLeft: 12, fontSize: 12, color: "#b91c1c" }}>{bookedError}</div>}
       </div>
 
       <div
@@ -717,7 +689,6 @@ const textBoxStyle = (tb: TextBox): React.CSSProperties => {
             </div>
 
             {/* 7列のスロット */}
-             {/* 7列のスロット */}
             {weekDays.map((_, dIdx) => {
               const key = `${dayISO[dIdx]}_${t}`;
               const disabled = booked.has(key);
@@ -738,7 +709,6 @@ const textBoxStyle = (tb: TextBox): React.CSSProperties => {
                     background: disabled ? "#eee" : picked ? "#e7f7ec" : preview ? "#e8f1ff" : "white",
                     outline: picked ? "2px solid #16a34a" : preview ? "2px solid #3b82f6" : "none",
                     outlineOffset: "-1px",
-
                     minHeight: 32,
                   }}
                 />
@@ -753,9 +723,12 @@ const textBoxStyle = (tb: TextBox): React.CSSProperties => {
       {/* 送信ボタン */}
       <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center" }}>
         <button onClick={() => nav(-1)} disabled={loading}>戻る</button>
-        <button onClick={onSubmit} disabled={loading}>{loading ? "送信中…" : "確認へ"}</button>
+        <button onClick={onSubmit} disabled={loading}>
+          {loading ? "送信中…" : "確認へ"}
+        </button>
         {loading && <span style={{ fontSize: 12, opacity: 0.8 }}>送信中です…</span>}
       </div>
     </div>
   );
 }
+

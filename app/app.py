@@ -287,8 +287,8 @@ def list_posts():
 
 @app.post("/api/FirstChoice")
 def create_post(p: PostIn):
-    if p.kind not in ("トラック", "大型テレビ", "配置型サイネージ"):
-        raise HTTPException(400, "kind must be '大型テレビ' or 'トラック' or '配置型サイネージ'")
+    if p.kind not in ("アドトラック", "大型ビジョン", "サイネージ"):
+        raise HTTPException(400, "kind must be '大型ビジョン' or 'アドトラック' or 'サイネージ'")
     with engine.begin() as conn:
         r = conn.execute(
             text("INSERT INTO posts(kind, title) VALUES (:k,:t) RETURNING id"),
@@ -675,9 +675,9 @@ async def create_bulk(
                     VALUES (:k, :t, CAST(:s AS JSONB))
                     RETURNING id
                 """),
-                {"k": "配置型サイネージ", "t": title, "s": json.dumps(sched)},
+                {"k": "サイネージ", "t": title, "s": json.dumps(sched)},
             ).scalar_one()
-            _insert_slots(conn, "配置型サイネージ", signage_id, sched)
+            _insert_slots(conn, "サイネージ", signage_id, sched)
             files = await _save_files_for_submission(conn, signage_id, files_signage)
             result["signage"]["submission_id"] = int(signage_id)
             result["signage"]["files"] = files
@@ -689,9 +689,9 @@ async def create_bulk(
                     VALUES (:k, :t, CAST(:s AS JSONB))
                     RETURNING id
                 """),
-                {"k": "トラック", "t": title, "s": json.dumps(sched)},
+                {"k": "アドトラック", "t": title, "s": json.dumps(sched)},
             ).scalar_one()
-            _insert_slots(conn, "トラック", truck_id, sched)
+            _insert_slots(conn, "アドトラック", truck_id, sched)
             files = await _save_files_for_submission(conn, truck_id, files_truck)
             result["truck"]["submission_id"] = int(truck_id)
             result["truck"]["files"] = files
@@ -864,22 +864,129 @@ def _parse_date(date_str: str) -> datetime.date:
 @app.get("/api/signage/booked")
 def get_booked_slots(
     start: str = Query(..., description="YYYY-MM-DD（含む）"),
-    end: str = Query(..., description="YYYY-MM-DD（含む）"),
-    kind: str = Query("配置型サイネージ", description="対象kind（例：配置型サイネージ / 大型テレビ / トラック）"),
+    end: str   = Query(..., description="YYYY-MM-DD（含む）"),
+    kind: str  = Query(..., description="対象kind（サイネージ)"),
 ):
     s = _parse_date(start)
     e = _parse_date(end)
     if e < s:
         raise HTTPException(status_code=400, detail="end must be >= start")
 
+    # ★ 受け取った kind を寛容に正規化（前後/全角スペースを除去）
+    k = (kind or "").strip().replace("\u3000", "")
+
+    # ※ 厳格な allowed チェックは外す（空っぽなら 422）
+    if not k:
+        raise HTTPException(status_code=422, detail="kind is required")
+
     with engine.begin() as conn:
         rows = conn.execute(text("""
             SELECT day::text AS d, to_char(time, 'HH24:MI') AS t
-            FROM reservation_slots
-            WHERE day BETWEEN :s AND :e
-              AND kind = :k
-            ORDER BY d, t
-        """), {"s": s, "e": e, "k": kind}).mappings().all()
+              FROM reservation_slots
+             WHERE day BETWEEN :s AND :e
+               AND kind = :k
+             ORDER BY d, t
+        """), {"s": s, "e": e, "k": k}).mappings().all()
+
+    out: Dict[str, List[str]] = {}
+    for r in rows:
+        out.setdefault(r["d"], []).append(r["t"])
+    return out
+
+@app.get("/api/truck/booked")
+def get_booked_slots(
+    start: str = Query(..., description="YYYY-MM-DD（含む）"),
+    end: str   = Query(..., description="YYYY-MM-DD（含む）"),
+    kind: str  = Query(..., description="対象kind（アドトラック)"),
+):
+    s = _parse_date(start)
+    e = _parse_date(end)
+    if e < s:
+        raise HTTPException(status_code=400, detail="end must be >= start")
+
+    # ★ 受け取った kind を寛容に正規化（前後/全角スペースを除去）
+    k = (kind or "").strip().replace("\u3000", "")
+
+    # ※ 厳格な allowed チェックは外す（空っぽなら 422）
+    if not k:
+        raise HTTPException(status_code=422, detail="kind is required")
+
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT day::text AS d, to_char(time, 'HH24:MI') AS t
+              FROM reservation_slots
+             WHERE day BETWEEN :s AND :e
+               AND kind = :k
+             ORDER BY d, t
+        """), {"s": s, "e": e, "k": k}).mappings().all()
+
+    out: Dict[str, List[str]] = {}
+    for r in rows:
+        out.setdefault(r["d"], []).append(r["t"])
+    return out
+
+
+@app.get("/api/tv/booked")
+def get_booked_slots(
+    start: str = Query(..., description="YYYY-MM-DD（含む）"),
+    end: str   = Query(..., description="YYYY-MM-DD（含む）"),
+    kind: str  = Query(..., description="対象kind（大型ビジョン)"),
+):
+    s = _parse_date(start)
+    e = _parse_date(end)
+    if e < s:
+        raise HTTPException(status_code=400, detail="end must be >= start")
+
+    # ★ 受け取った kind を寛容に正規化（前後/全角スペースを除去）
+    k = (kind or "").strip().replace("\u3000", "")
+
+    # ※ 厳格な allowed チェックは外す（空っぽなら 422）
+    if not k:
+        raise HTTPException(status_code=422, detail="kind is required")
+
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT day::text AS d, to_char(time, 'HH24:MI') AS t
+              FROM reservation_slots
+             WHERE day BETWEEN :s AND :e
+               AND kind = :k
+             ORDER BY d, t
+        """), {"s": s, "e": e, "k": k}).mappings().all()
+
+    out: Dict[str, List[str]] = {}
+    for r in rows:
+        out.setdefault(r["d"], []).append(r["t"])
+    return out
+
+from typing import List, Optional, Dict
+from sqlalchemy import bindparam
+
+@app.get("/api/AllPost/booked")
+def get_booked_slots(
+    start: str = Query(..., description="YYYY-MM-DD（含む）"),
+    end: str   = Query(..., description="YYYY-MM-DD（含む）"),
+    kind: Optional[List[str]] = Query(None, description="対象kindを複数可（&kind=サイネージ&kind=大型ビジョン&kind=アドトラック）"),
+):
+    s = _parse_date(start)
+    e = _parse_date(end)
+    if e < s:
+        raise HTTPException(status_code=400, detail="end must be >= start")
+
+    kinds = [x.strip().replace("\u3000", "") for x in (kind or []) if x and x.strip()]
+    if not kinds:
+        raise HTTPException(status_code=422, detail="kind is required")
+
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT day::text AS d, to_char(time, 'HH24:MI') AS t
+                  FROM reservation_slots
+                 WHERE day BETWEEN :s AND :e
+                   AND kind IN :kinds
+                 ORDER BY d, t
+            """).bindparams(bindparam("kinds", expanding=True)),
+            {"s": s, "e": e, "kinds": kinds},
+        ).mappings().all()
 
     out: Dict[str, List[str]] = {}
     for r in rows:

@@ -2,9 +2,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-type Props = {
-  title?: string; // ← オプショナルに
-};
+// ===== 追加：予約一覧API =====
+const API_ROOT = "http://localhost:8000";
+const BOOKED_API = `${API_ROOT}/api/AllPost/booked`;
 
 // 画像許可タイプ
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
@@ -118,12 +118,12 @@ const fmtDuration = (sec: number) => {
   return `${m}:${String(s).padStart(2, "0")}`;
 };
 
+//プレビュー
 type ImgPreview = { name: string; url: string; width: number; height: number; ok: boolean; typeOk: boolean};
 type AudioPreview = { name: string; url: string; duration: number };
 type VideoPreview = { name: string; url: string; width: number; height: number; duration: number };
 
-// ★最小変更：名前はそのまま（動作に影響なし）
-export default function TVForm({ title }: Props) {
+export default function TVForm() {
   const nav = useNavigate();
 
   // 週表示関連
@@ -132,6 +132,8 @@ export default function TVForm({ title }: Props) {
     d.setHours(0, 0, 0, 0);
     return d;
   });
+
+
   const mondayStart = false;
   const weekDays = useMemo(() => {
     const start = startOfWeek(anchorDate, mondayStart);
@@ -141,6 +143,7 @@ export default function TVForm({ title }: Props) {
       return d;
     });
   }, [anchorDate, mondayStart]);
+
   const fmtWeekday = useMemo(() => new Intl.DateTimeFormat("ja-JP", { weekday: "short" }), []);
   const fmtMonthDay = useMemo(
     () => new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric" }),
@@ -148,14 +151,56 @@ export default function TVForm({ title }: Props) {
   );
   const slots = useMemo(() => createTimeSlots(30, 8, 22), []);
 
-  // 予約ダミー（API接続時に差し替え）
-  const booked = useMemo(() => {
-    const s = new Set<string>();
-    const day0 = toISODate(weekDays[0]);
-    s.add(`${day0}_10:00`);
-    s.add(`${day0}_10:30`);
-    return s;
-  }, [weekDays]);
+    // ===== 変更：ダミー予約をやめ、APIから取得した予約でグレーアウト =====
+    const [booked, setBooked] = useState<Set<string>>(new Set());
+    const [bookedLoading, setBookedLoading] = useState(false);
+    const [bookedError, setBookedError] = useState<string | null>(null);
+  
+    useEffect(() => {
+  const ctrl = new AbortController();
+  setBookedLoading(true);
+  setBookedError(null);
+
+  (async () => {
+    try {
+      const start = startOfWeek(anchorDate, mondayStart);
+      const end = new Date(start);
+      end.setDate(start.getDate() + 6);
+
+      const qs = new URLSearchParams({ start: toISODate(start), end: toISODate(end) });
+
+      // ★ APIが複数kind対応ならこちら（&kind=... を繰り返し）
+      ["配置型サイネージ", "大型テレビ", "トラック"].forEach(k => qs.append("kind", k));
+      // ★ もしAPIが単一kindだけ対応なら次の1行に切り替え
+      // qs.set("kind", "サイネージ");
+
+      const url = new URL(BOOKED_API);
+      url.search = qs.toString();
+      console.log("Request URL:", url.toString());
+
+      const res = await fetch(url.toString(), { signal: ctrl.signal });
+      const text = await res.text();
+      if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+
+      const json: Record<string, string[]> = text ? JSON.parse(text) : {};
+      const booked = new Set<string>();
+      for (const [d, times] of Object.entries(json)) {
+        for (const t of (times || [])) booked.add(`${d}_${t}`);
+      }
+      setBooked(booked);
+    } catch (err: any) {
+      if (err.name !== "AbortError") {
+        console.error("Failed to fetch booked slots:", err);
+        setBooked(new Set()); // フォールバック
+        setBookedError("予約状況の取得に失敗しました");
+      }
+    } finally {
+      setBookedLoading(false);
+    }
+  })();
+
+  return () => ctrl.abort();
+}, [anchorDate, mondayStart]);
 
   // ▼▼▼ ここから：ファイル関係をセクション別に分割 ▼▼▼
   // 大型ビジョン
@@ -377,7 +422,6 @@ export default function TVForm({ title }: Props) {
       const maxD = Math.max(dragStart.day, dayIdx);
       const minS = Math.min(dragStart.slot, slotIdx);
       const maxS = Math.max(dragStart.slot, slotIdx);
-
       const set = new Set<string>();
       for (let d = minD; d <= maxD; d++) {
         for (let s = minS; s <= maxS; s++) {
@@ -433,8 +477,9 @@ export default function TVForm({ title }: Props) {
     });
 
     const fd = new FormData();
-    fd.append("kind", "一括配信");
-    fd.append("title", title ?? "");
+    fd.append("kind", "配置型サイネージ");
+    fd.append("kind", "大型テレビ");
+    fd.append("kind", "トラック");
     fd.append("tpl_id", tplId);
     fd.append("text_values", JSON.stringify(textValues));
     fd.append("schedule", JSON.stringify(byDate));
@@ -469,7 +514,6 @@ export default function TVForm({ title }: Props) {
   return (
     <div style={{ maxWidth: 1000, margin: "24px auto", padding: 16 }}>
       <h2>一括配信</h2>
-      <div style={{ opacity: 0.7, marginBottom: 8 }}>タイトル：{title}</div>
 
       {/* 大型ビジョンファイル選択（日時選択より上） */}
       <div style={{ marginTop: 16 }}>
@@ -575,7 +619,7 @@ export default function TVForm({ title }: Props) {
       {/* サイネージファイル選択 */}
       <div style={{ marginTop: 16 }}>
         <label>
-          配置型サイネージ用 動画/画像ファイル
+          サイネージ用 動画/画像ファイル
           <input
             type="file"
             accept="video/*,image/*"
@@ -895,6 +939,8 @@ export default function TVForm({ title }: Props) {
         <div style={{ marginLeft: 8, opacity: 0.8 }}>
           週の開始日：{fmtMonthDay.format(startOfWeek(anchorDate, mondayStart))}
         </div>
+        {bookedLoading && <div style={{ marginLeft: 12, fontSize: 12, opacity: 0.8 }}>予約状況を取得中…</div>}
+        {bookedError && <div style={{ marginLeft: 12, fontSize: 12, color: "#b91c1c" }}>{bookedError}</div>}
       </div>
 
       {/* 週グリッド（ドラッグ対応） */}

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-const KINDS = ["配置型サイネージ"]; 
+
+// ★このページが対象とする物理（ページごとに差し替え）
+const KIND = "アドトラック"; 
 
 const API_ROOT = "http://localhost:8000";
-const BOOKED_API = `${API_ROOT}/api/signage/booked`;
-const ADMIN_DETAIL_API = `${API_ROOT}/api/admin/submissions/detail`;
+const BOOKED_API = `${API_ROOT}/api/truck/booked`;
 
 // 30分スロット生成
 function createTimeSlots(stepMin = 30, startHour = 8, endHour = 22) {
@@ -45,32 +46,17 @@ export default function TVPage_R() {
   const [loading, setLoading] = useState(false);
   const [loadErr, setLoadErr] = useState<string | null>(null);
 
-  // 予約セルのみクリック可：詳細表示
-  async function toggleSlot(key: string, disabled?: boolean) {
-    if (disabled) return;
-    const [date, time] = key.split("_");
-    try {
-      const qs = new URLSearchParams({ date, time });
-      KINDS.forEach(k => qs.append("kind", k));
-      const res = await fetch(`${ADMIN_DETAIL_API}?${qs.toString()}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      // ここは適宜モーダル等に差し替え
-      alert(`${date} ${time}\n件数: ${data.length}\n` + data.map((x:any)=>`#${x.submission_id} ${x.title}`).join("\n"));
-    } catch (e) {
-      console.error("detail fetch failed:", e);
-      alert("詳細取得に失敗しました");
-    }
-  }
-
   // 週が変わったら当該週の予約を取得（グレーアウト用）
   useEffect(() => {
     const start = startOfWeek(anchorDate, false);
     const end = new Date(start);
     end.setDate(start.getDate() + 6);
 
-    const qs = new URLSearchParams({ start: toISODate(start), end: toISODate(end) });
-    KINDS.forEach(k => qs.append("kind", k));
+    const qs = new URLSearchParams({
+      start: toISODate(start),
+      end: toISODate(end),
+      kind: KIND,
+    });
 
     const ctrl = new AbortController();
     setLoading(true);
@@ -80,13 +66,13 @@ export default function TVPage_R() {
       .then(async r => {
         const t = await r.text();
         if (!r.ok) throw new Error(t || `HTTP ${r.status}`);
-        const json: Record<string,string[]> = t ? JSON.parse(t) : {};
+        const json: Record<string, string[]> = t ? JSON.parse(t) : {};
         const s = new Set<string>();
-        Object.entries(json).forEach(([d, arr]) => (arr||[]).forEach(time => s.add(`${d}_${time}`)));
+        Object.entries(json).forEach(([d, arr]) => (arr || []).forEach(time => s.add(`${d}_${time}`)));
         setBooked(s);
       })
       .catch(err => {
-        if (err.name === "AbortError") return;
+        if ((err as any).name === "AbortError") return;
         console.error(err);
         setLoadErr("予約状況の取得に失敗しました");
         setBooked(new Set()); // フォールバック：全て未予約扱い
@@ -123,10 +109,9 @@ export default function TVPage_R() {
 
   return (
     <div style={{ maxWidth: 1000, margin: "24px auto", padding: 16 }}>
-      <h2>サイネージ管理</h2>
+      <h2>配信スケジュール（{KIND}）</h2>
 
       {/* 週ナビ */}
-      <h3 style={{ marginTop: 24 }}>配信スケジュール</h3>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
         <button onClick={goPrevWeek}>◀︎ 前の週</button>
         <button onClick={goThisWeek}>今週</button>
@@ -191,22 +176,21 @@ export default function TVPage_R() {
               {t}
             </div>
 
-            {/* 7列のスロット：予約のみグレー＆クリック可能 */}
+            {/* 7列のスロット：予約のみグレー */}
             {weekDays.map((_, dIdx) => {
               const key = `${dayISO[dIdx]}_${t}`;
               const reserved = booked.has(key);
-              const disabled = !reserved;
               return (
                 <div
                   key={key}
-                  onClick={() => toggleSlot(key, disabled)}
-                  title={reserved ? "予約あり（クリックで詳細）" : key.replace("_", " ")}
+                  // クリック挙動・詳細取得を廃止（デコイ）
+                  title={reserved ? "予約あり" : ""}
                   style={{
                     borderRight: "1px solid #eee",
                     borderBottom: "1px solid #eee",
                     padding: "0",
-                    cursor: disabled ? "not-allowed" : "pointer",
-                    background: reserved ? "#eee" : "white", // ← グレーアウトのみ
+                    cursor: "default",
+                    background: reserved ? "#eee" : "white",
                     minHeight: 32,
                   }}
                 />

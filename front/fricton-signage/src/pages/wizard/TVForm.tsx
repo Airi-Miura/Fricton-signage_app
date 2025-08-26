@@ -2,11 +2,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-type Props = {
-  title?: string; // ← オプショナルに
-};
+// ===== APIエンドポイント =====
+const API_ROOT = "http://localhost:8000";
+const BOOKED_API = `${API_ROOT}/api/signage/booked`; // kind=大型ビジョン で予約を取得
 
-// 推奨サイズ（画像）
+// 推奨サイズ（画像：横）
 const REQUIRED_W = 800;
 const REQUIRED_H = 500;
 // サムネイル枠（推奨サイズの1/4）
@@ -48,7 +48,7 @@ const fmtDuration = (sec: number) => {
 type ImgPreview = { name: string; url: string; width: number; height: number; ok: boolean };
 type VideoPreview = { name: string; url: string; width: number; height: number; duration: number };
 
-export default function TVForm({ title }: Props) {
+export default function TVForm() {
   const nav = useNavigate();
 
   // 週表示関連
@@ -57,6 +57,7 @@ export default function TVForm({ title }: Props) {
     d.setHours(0, 0, 0, 0);
     return d;
   });
+  
   const mondayStart = false;
   const weekDays = useMemo(() => {
     const start = startOfWeek(anchorDate, mondayStart);
@@ -72,15 +73,48 @@ export default function TVForm({ title }: Props) {
     []
   );
   const slots = useMemo(() => createTimeSlots(30, 8, 22), []);
+  const dayISO = weekDays.map(d => toISODate(d));
 
-  // 予約ダミー（API接続時に差し替え）
-  const booked = useMemo(() => {
-    const s = new Set<string>();
-    const day0 = toISODate(weekDays[0]);
-    s.add(`${day0}_10:00`);
-    s.add(`${day0}_10:30`);
-    return s;
-  }, [weekDays]);
+  // ===== 予約状況（APIから取得） =====
+  const [booked, setBooked] = useState<Set<string>>(new Set());
+  const [bookedLoading, setBookedLoading] = useState(false);
+  const [bookedError, setBookedError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const start = startOfWeek(anchorDate, mondayStart);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+
+    const qs = new URLSearchParams({
+      start: toISODate(start),
+      end: toISODate(end),
+      kind: "大型テレビ",
+    });
+
+    const ctrl = new AbortController();
+    setBookedLoading(true);
+    setBookedError(null);
+
+    fetch(`${BOOKED_API}?${qs.toString()}`, { signal: ctrl.signal })
+      .then(async res => {
+        const text = await res.text();
+        if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+        const json: Record<string, string[]> = text ? JSON.parse(text) : {};
+        const s = new Set<string>();
+        Object.entries(json).forEach(([d, times]) => (times || []).forEach(t => s.add(`${d}_${t}`)));
+        setBooked(s);
+      })
+      .catch(err => {
+        if ((err as any).name === "AbortError") return;
+        console.error("Failed to fetch booked slots:", err);
+        setBooked(new Set()); // フォールバック：全て未予約扱い
+        setBookedError("予約状況の取得に失敗しました");
+      })
+      .finally(() => setBookedLoading(false));
+
+    return () => ctrl.abort();
+  }, [anchorDate, mondayStart]);
+
   // ファイル関係
   const [files, setFiles] = useState<FileList | null>(null);
   const [imgPreviews, setImgPreviews] = useState<ImgPreview[]>([]);
@@ -247,7 +281,7 @@ export default function TVForm({ title }: Props) {
       setOtherFiles(others);
     });
 
-    // cleanup: この useEffect が再実行/アンマウントされる時に URL を解放
+    // cleanup
     return () => {
       imgs.forEach(p => URL.revokeObjectURL(p.url));
       videos.forEach(p => URL.revokeObjectURL(p.url));
@@ -268,55 +302,64 @@ export default function TVForm({ title }: Props) {
       setError("動画または画像ファイルを選択してください");
       return;
     }
-    //画像サイズを必須にしたい場合は有効化
+    // 画像サイズチェック（TVは 800×500）
     if (imgPreviews.some(p => !p.ok)) {
-      setError("画像サイズは 500px × 800px にしてください（NGの画像があります）");
+      setError("画像サイズは 800px × 500px にしてください（NGの画像があります）");
+      return;
+    }
+    // 予約済みとの重複検出
+    const conflicts = Array.from(pickedSlots).filter(k => booked.has(k));
+    if (conflicts.length > 0) {
+      setError("既に予約済みの時間帯が含まれています。別の時間を選んでください。");
       return;
     }
 
-
+    // 選択スロットを日付ごとに整形
     const byDate: Record<string, string[]> = {};
     Array.from(pickedSlots).forEach(k => {
       const [d, t] = k.split("_");
       (byDate[d] ??= []).push(t);
     });
 
-
-    // ← JSONではなく FormData を使用（画像バイナリをそのまま送るため）
+    // 画像バイナリ送信のため FormData を使用
     const fd = new FormData();
     fd.append("kind", "大型ビジョン");
-    fd.append("title", title ?? "");
-    fd.append("schedule", JSON.stringify(byDate));               // 文字列JSONとして入れる
-    
-    Array.from(files ?? []).forEach(f => fd.append("files_tv", f)); 
+    fd.append("schedule", JSON.stringify(byDate));
+    Array.from(files ?? []).forEach(f => fd.append("files_tv", f));
 
     setLoading(true);
     try {
-    // ★ Content-Type は絶対に自分で付けない（ブラウザが boundary 付きで付与する）
-    const res = await fetch("http://localhost:8000/api/tv", {
-      method: "POST",
-      body: fd,
-    });
+      const res = await fetch(`${API_ROOT}/api/tv`, {
+        method: "POST",
+        body: fd,
+      });
 
-    const txt = await res.text();                 // デバッグ出力（必要なら JSON にパース）
-    console.log("POST /api/tv ->", res.status, txt);
-      if (!res.ok) throw new Error(txt || `HTTP ${res.status}`);
+      const txt = await res.text();
+      console.log("POST /api/tv ->", res.status, txt);
+      if (!res.ok) {
+        let detail = "";
+        try {
+          const j = JSON.parse(txt);
+          if (j?.detail) detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+        } catch {}
+        throw new Error(detail || txt || `HTTP ${res.status}`);
+      }
 
       alert("送信しました！");
-    } catch (err) {
+      // 同週で再フェッチ（即グレー反映）＆選択クリア
+      setAnchorDate(d => new Date(d));
+      setPickedSlots(new Set());
+    } catch (err: any) {
       console.error(err);
-      setError("送信に失敗しました。もう一度お試しください。");
+      setError(err?.message || "送信に失敗しました。もう一度お試しください。");
     } finally {
       setLoading(false);
     }
-    }
-
-  const dayISO = weekDays.map(d => toISODate(d));
+  }
 
   return (
     <div style={{ maxWidth: 1000, margin: "24px auto", padding: 16 }}>
       <h2>大型ビジョン</h2>
-      <div style={{ opacity: 0.7, marginBottom: 8 }}>タイトル：{title}</div>
 
       {/* ① ファイル選択（日時選択より上） */}
       <div style={{ marginTop: 16 }}>
@@ -419,7 +462,7 @@ export default function TVForm({ title }: Props) {
         )}
       </div>
 
-      {/* ② 週表示の日時選択（SignagePageと同様） */}
+      {/* ② 週表示の日時選択（SignagePage と同様） */}
       <h3 style={{ marginTop: 24 }}>配信スケジュール（週表示）</h3>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
         <button onClick={goPrevWeek}>◀︎ 前の週</button>
@@ -428,6 +471,8 @@ export default function TVForm({ title }: Props) {
         <div style={{ marginLeft: 8, opacity: 0.8 }}>
           週の開始日：{fmtMonthDay.format(startOfWeek(anchorDate, mondayStart))}
         </div>
+        {bookedLoading && <div style={{ marginLeft: 12, fontSize: 12, opacity: 0.8 }}>予約状況を取得中…</div>}
+        {bookedError && <div style={{ marginLeft: 12, fontSize: 12, color: "#b91c1c" }}>{bookedError}</div>}
       </div>
 
       <div
@@ -483,7 +528,6 @@ export default function TVForm({ title }: Props) {
             </div>
 
             {/* 7列のスロット */}
-             {/* 7列のスロット */}
             {weekDays.map((_, dIdx) => {
               const key = `${dayISO[dIdx]}_${t}`;
               const disabled = booked.has(key);
@@ -504,7 +548,6 @@ export default function TVForm({ title }: Props) {
                     background: disabled ? "#eee" : picked ? "#e7f7ec" : preview ? "#e8f1ff" : "white",
                     outline: picked ? "2px solid #16a34a" : preview ? "2px solid #3b82f6" : "none",
                     outlineOffset: "-1px",
-
                     minHeight: 32,
                   }}
                 />
@@ -514,19 +557,7 @@ export default function TVForm({ title }: Props) {
         ))}
       </div>
 
-      {/* サマリ 選択された時間の表示 */}
-      {/* <div style={{ marginTop: 16 }}>
-        選択時間：
-        {Array.from(pickedSlots)
-          .map(s => {
-            const [d, time] = s.split("_");
-            return `${d} ${time}`;
-          })
-          .join(", ") || "なし"}
-      </div> */}
-
       {error && <div style={{ color: "red", marginTop: 8 }}>{error}</div>}
-
 
       <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center" }}>
         <button onClick={() => nav(-1)} disabled={loading}>戻る</button>

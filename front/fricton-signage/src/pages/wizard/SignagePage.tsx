@@ -2,13 +2,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-type Props = {
-  title?: string; // ← オプショナルに
-};
-
 // ===== 追加：予約一覧API =====
 const API_ROOT = "http://localhost:8000";
 const BOOKED_API = `${API_ROOT}/api/signage/booked`;
+
+//表示用
+const REQUIRED_W = 500;
+const REQUIRED_H = 800;
+const THUMB_W = 125; // 500 の 1/4
+const THUMB_H = 200; // 800 の 1/4
 
 // 30分スロット生成
 function createTimeSlots(stepMin = 30, startHour = 8, endHour = 22) {
@@ -38,11 +40,6 @@ function startOfWeek(anchor: Date, mondayStart = false) {
   return d;
 }
 
-// 表示用
-const REQUIRED_W = 500;
-const REQUIRED_H = 800;
-const THUMB_W = 125; // 500 の 1/4
-const THUMB_H = 200; // 800 の 1/4
 const fmtDuration = (sec: number) => {
   if (!isFinite(sec) || sec <= 0) return "—";
   const m = Math.floor(sec / 60);
@@ -54,7 +51,7 @@ const fmtDuration = (sec: number) => {
 type ImgPreview = { name: string; url: string; width: number; height: number; ok: boolean };
 type VideoPreview = { name: string; url: string; width: number; height: number; duration: number };
 
-export default function SignagePage({ title }: Props) {
+export default function SignagePage() {
   const nav = useNavigate();
 
   const [anchorDate, setAnchorDate] = useState<Date>(() => {
@@ -329,8 +326,7 @@ export default function SignagePage({ title }: Props) {
 
       // 画像バイナリ送信のため FormData
       const fd = new FormData();
-      fd.append("kind", "配置型サイネージ");
-      fd.append("title", title ?? "");
+      fd.append("kind", "配置型サイネージ");    
       fd.append("schedule", JSON.stringify(byDate));
       Array.from(files ?? []).forEach(f => fd.append("files_signage", f));
 
@@ -367,8 +363,7 @@ export default function SignagePage({ title }: Props) {
 
   return (
     <div style={{ maxWidth: 1000, margin: "24px auto", padding: 16 }}>
-      <h2>配置型サイネージ</h2>
-      <div style={{ opacity: 0.7, marginBottom: 8 }}>タイトル：{title}</div>
+      <h2>サイネージ</h2>
 
       {/* ファイル選択 */}
       <div style={{ marginTop: 16 }}>

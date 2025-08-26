@@ -14,6 +14,7 @@ export default function AdminAuthPage() {
   // 上段：未認証（待機中）
   const [pending, setPending] = useState<Submission[]>([]);
   // 下段：処理済み（認証 or 非認証）
+  
   const [reviewed, setReviewed] = useState<Reviewed[]>([]);
   // UI状態
   const [loading, setLoading] = useState(false);
