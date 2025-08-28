@@ -516,47 +516,6 @@ async def create_trucks(
 
     return {"ok": True, "submission_id": sub_id, "files": saved_paths}
 
-# --- AllPost ---
-@app.post("/api/AllPost")
-async def create_AllPost(
-    kind: str = Form(...),
-    title: str = Form(""),
-    schedule: str = Form(...),
-    files_AllPost: List[UploadFile] = File(...),
-):
-    try:
-        sched = json.loads(schedule)
-        if not _valid_sched_dict(sched):
-            raise ValueError("schedule must be object")
-        with engine.begin() as conn:
-            conflicts = find_conflicts(conn, kind, sched)
-            if conflicts:
-                raise HTTPException(
-                    status_code=409,
-                    detail={"message": "slot conflicts", "conflicts": [{"date": d, "time": t} for d, t in conflicts]},
-                )
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid schedule JSON")
-
-    saved_paths: List[str] = []
-    with engine.begin() as conn:
-        sub_id = conn.execute(
-            text("""
-                INSERT INTO submissions(kind, title, schedule_json)
-                VALUES (:k, :t, CAST(:s AS JSONB))
-                RETURNING id
-            """),
-            {"k": kind, "t": title, "s": json.dumps(sched)},
-        ).scalar_one()
-
-        _insert_slots(conn, kind, sub_id, sched)
-
-        saved_paths = await _save_files_for_submission(conn, sub_id, files_AllPost)
-
-    return {"ok": True, "submission_id": sub_id, "files": saved_paths}
-
 # --- 共通保存関数を使う Bulk ---
 @app.post("/api/submit/bulk")
 async def create_bulk(

@@ -11,7 +11,7 @@ export default function LoginPage() {
   // 既にログイン済みならタブ画面へ
   useEffect(() => {
     if (localStorage.getItem("auth") === "ok") {
-      nav("/app/signage", { replace: true });
+      nav("/app/truck", { replace: true });
     }
   }, [nav]);
 
@@ -42,7 +42,7 @@ export default function LoginPage() {
       const data = await res.json(); // { ok: true, user_id, username, name }
       localStorage.setItem("auth", "ok");
       localStorage.setItem("user", JSON.stringify(data));
-      nav("/app/signage", { replace: true });
+      nav("/app/truck", { replace: true });
     } catch (e: any) {
       setErr(e.message || "ログインに失敗しました");
     } finally {
