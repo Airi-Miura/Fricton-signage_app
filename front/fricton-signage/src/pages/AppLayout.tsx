@@ -46,27 +46,10 @@ export default function AppLayout() {
       {/* タブ */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <NavLink
-          to="AllPost"
-          style={({ isActive }) => (isActive ? activeStyle : tabStyle)}
-        >
-          一括配信
-        </NavLink>
-        <NavLink
-          to="signage"
-          style={({ isActive }) => (isActive ? activeStyle : tabStyle)}
-        >
-          サイネージ
-        </NavLink>
-        <NavLink
           to="truck"
           style={({ isActive }) => (isActive ? activeStyle : tabStyle)}
         >
           アドトラック
-        </NavLink>
-        <NavLink 
-          to="tv" 
-          style={({ isActive }) => (isActive ? activeStyle : tabStyle)}>
-          大型ビジョン
         </NavLink>
       </div>
 

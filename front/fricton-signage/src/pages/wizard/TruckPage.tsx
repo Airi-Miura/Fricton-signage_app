@@ -392,7 +392,6 @@ export default function TruckPage() {
       return;
     }
 
-    
     setLoading(true);
     try {
       const byDate: Record<string, string[]> = {};
@@ -416,7 +415,7 @@ export default function TruckPage() {
       });
 
       const txt = await res.text();
-      console.log("POST /api/signage ->", res.status, txt);
+      console.log("POST /api/truck ->", res.status, txt);
       if (!res.ok) {
         // サーバ側の409もここに来る
         let detail = "";

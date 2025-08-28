@@ -1,7 +1,7 @@
 // src/services/api.ts
 export const API_BASE = "/api";
 
-export const kinds = ["大型ビジョン", "サイネージ", "アドトラック"] as const;
+export const kinds = ["アドトラック"] as const;
 export type Kind = typeof kinds[number];  // ← これに合わせておく（重複の union 型は削除）
 
 export type FirstChoice = {

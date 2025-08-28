@@ -475,89 +475,6 @@ async def _save_files_for_submission(conn, submission_id: int, files: Optional[L
         saved_paths.append(str(dest))
     return saved_paths
 
-# --- signage ---
-@app.post("/api/signage")
-async def create_signage(
-    kind: str = Form(...),
-    title: str = Form(""),
-    schedule: str = Form(...),                        # JSON文字列（{"YYYY-MM-DD":["HH:MM",...]}）
-    files_signage: List[UploadFile] = File(...),      # 複数ファイル
-):
-    try:
-        sched = json.loads(schedule)
-        if not _valid_sched_dict(sched):
-            raise ValueError("schedule must be object of date -> [HH:MM]")
-        # プリチェック（UX向上）
-        with engine.begin() as conn:
-            conflicts = find_conflicts(conn, kind, sched)
-            if conflicts:
-                raise HTTPException(
-                    status_code=409,
-                    detail={"message": "slot conflicts", "conflicts": [{"date": d, "time": t} for d, t in conflicts]},
-                )
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid schedule JSON")
-
-    saved_paths: List[str] = []
-    with engine.begin() as conn:
-        sub_id = conn.execute(
-            text("""
-                INSERT INTO submissions(kind, title, schedule_json)
-                VALUES (:k, :t, CAST(:s AS JSONB))
-                RETURNING id
-            """),
-            {"k": kind, "t": title, "s": json.dumps(sched)},
-        ).scalar_one()
-
-        _insert_slots(conn, kind, sub_id, sched)  # 最終防衛：PKで409
-
-        saved_paths = await _save_files_for_submission(conn, sub_id, files_signage)
-
-    return {"ok": True, "submission_id": sub_id, "files": saved_paths}
-
-# --- tv ---
-@app.post("/api/tv")
-async def create_tv(
-    kind: str = Form(...),
-    title: str = Form(""),
-    schedule: str = Form(...),
-    files_tv: List[UploadFile] = File(...),
-):
-    try:
-        sched = json.loads(schedule)
-        if not _valid_sched_dict(sched):
-            raise ValueError("schedule must be object")
-        with engine.begin() as conn:
-            conflicts = find_conflicts(conn, kind, sched)
-            if conflicts:
-                raise HTTPException(
-                    status_code=409,
-                    detail={"message": "slot conflicts", "conflicts": [{"date": d, "time": t} for d, t in conflicts]},
-                )
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid schedule JSON")
-
-    saved_paths: List[str] = []
-    with engine.begin() as conn:
-        sub_id = conn.execute(
-            text("""
-                INSERT INTO submissions(kind, title, schedule_json)
-                VALUES (:k, :t, CAST(:s AS JSONB))
-                RETURNING id
-            """),
-            {"k": kind, "t": title, "s": json.dumps(sched)},
-        ).scalar_one()
-
-        _insert_slots(conn, kind, sub_id, sched)
-
-        saved_paths = await _save_files_for_submission(conn, sub_id, files_tv)
-
-    return {"ok": True, "submission_id": sub_id, "files": saved_paths}
-
 # --- trucks ---
 @app.post("/api/trucks")
 async def create_trucks(
@@ -646,8 +563,6 @@ async def create_bulk(
     title: str = Form(""),
     schedule: str = Form(...),                        # {"YYYY-MM-DD":["HH:MM",...]}
     files_signage: Optional[List[UploadFile]] = File(None),
-    files_truck:   Optional[List[UploadFile]] = File(None),
-    files_tv:      Optional[List[UploadFile]] = File(None),
 ):
     try:
         sched = json.loads(schedule)
@@ -656,32 +571,14 @@ async def create_bulk(
     except Exception:
         raise HTTPException(status_code=400, detail="invalid schedule JSON")
 
-    if not ((files_signage and len(files_signage) > 0) or
-            (files_truck and len(files_truck) > 0) or
-            (files_tv and len(files_tv) > 0)):
+    if not ():
         raise HTTPException(status_code=400, detail="no files selected")
 
     result = {
-        "signage": {"submission_id": None, "files": []},
         "truck":   {"submission_id": None, "files": []},
-        "tv":      {"submission_id": None, "files": []},
     }
 
     with engine.begin() as conn:
-        if files_signage and len(files_signage) > 0:
-            signage_id = conn.execute(
-                text("""
-                    INSERT INTO submissions(kind, title, schedule_json)
-                    VALUES (:k, :t, CAST(:s AS JSONB))
-                    RETURNING id
-                """),
-                {"k": "サイネージ", "t": title, "s": json.dumps(sched)},
-            ).scalar_one()
-            _insert_slots(conn, "サイネージ", signage_id, sched)
-            files = await _save_files_for_submission(conn, signage_id, files_signage)
-            result["signage"]["submission_id"] = int(signage_id)
-            result["signage"]["files"] = files
-
         if files_truck and len(files_truck) > 0:
             truck_id = conn.execute(
                 text("""
@@ -695,20 +592,6 @@ async def create_bulk(
             files = await _save_files_for_submission(conn, truck_id, files_truck)
             result["truck"]["submission_id"] = int(truck_id)
             result["truck"]["files"] = files
-
-        if files_tv and len(files_tv) > 0:
-            tv_id = conn.execute(
-                text("""
-                    INSERT INTO submissions(kind, title, schedule_json)
-                    VALUES (:k, :t, CAST(:s AS JSONB))
-                    RETURNING id
-                """),
-                {"k": "大型テレビ", "t": title, "s": json.dumps(sched)},
-            ).scalar_one()
-            _insert_slots(conn, "大型テレビ", tv_id, sched)
-            files = await _save_files_for_submission(conn, tv_id, files_tv)
-            result["tv"]["submission_id"] = int(tv_id)
-            result["tv"]["files"] = files
 
     return {"ok": True, "result": result}
 
@@ -861,76 +744,11 @@ def _parse_date(date_str: str) -> datetime.date:
     except Exception:
         raise HTTPException(status_code=400, detail=f"invalid date format: {date_str} (YYYY-MM-DD expected)")
 
-@app.get("/api/signage/booked")
-def get_booked_slots(
-    start: str = Query(..., description="YYYY-MM-DD（含む）"),
-    end: str   = Query(..., description="YYYY-MM-DD（含む）"),
-    kind: str  = Query(..., description="対象kind（サイネージ)"),
-):
-    s = _parse_date(start)
-    e = _parse_date(end)
-    if e < s:
-        raise HTTPException(status_code=400, detail="end must be >= start")
-
-    # ★ 受け取った kind を寛容に正規化（前後/全角スペースを除去）
-    k = (kind or "").strip().replace("\u3000", "")
-
-    # ※ 厳格な allowed チェックは外す（空っぽなら 422）
-    if not k:
-        raise HTTPException(status_code=422, detail="kind is required")
-
-    with engine.begin() as conn:
-        rows = conn.execute(text("""
-            SELECT day::text AS d, to_char(time, 'HH24:MI') AS t
-              FROM reservation_slots
-             WHERE day BETWEEN :s AND :e
-               AND kind = :k
-             ORDER BY d, t
-        """), {"s": s, "e": e, "k": k}).mappings().all()
-
-    out: Dict[str, List[str]] = {}
-    for r in rows:
-        out.setdefault(r["d"], []).append(r["t"])
-    return out
-
 @app.get("/api/truck/booked")
 def get_booked_slots(
     start: str = Query(..., description="YYYY-MM-DD（含む）"),
     end: str   = Query(..., description="YYYY-MM-DD（含む）"),
     kind: str  = Query(..., description="対象kind（アドトラック)"),
-):
-    s = _parse_date(start)
-    e = _parse_date(end)
-    if e < s:
-        raise HTTPException(status_code=400, detail="end must be >= start")
-
-    # ★ 受け取った kind を寛容に正規化（前後/全角スペースを除去）
-    k = (kind or "").strip().replace("\u3000", "")
-
-    # ※ 厳格な allowed チェックは外す（空っぽなら 422）
-    if not k:
-        raise HTTPException(status_code=422, detail="kind is required")
-
-    with engine.begin() as conn:
-        rows = conn.execute(text("""
-            SELECT day::text AS d, to_char(time, 'HH24:MI') AS t
-              FROM reservation_slots
-             WHERE day BETWEEN :s AND :e
-               AND kind = :k
-             ORDER BY d, t
-        """), {"s": s, "e": e, "k": k}).mappings().all()
-
-    out: Dict[str, List[str]] = {}
-    for r in rows:
-        out.setdefault(r["d"], []).append(r["t"])
-    return out
-
-
-@app.get("/api/tv/booked")
-def get_booked_slots(
-    start: str = Query(..., description="YYYY-MM-DD（含む）"),
-    end: str   = Query(..., description="YYYY-MM-DD（含む）"),
-    kind: str  = Query(..., description="対象kind（大型ビジョン)"),
 ):
     s = _parse_date(start)
     e = _parse_date(end)

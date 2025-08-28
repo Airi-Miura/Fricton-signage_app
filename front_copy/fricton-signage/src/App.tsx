@@ -1,8 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
-import SignagePage_R from "./pages/wizard/SignagePage_R";
 import TruckPage_R from "./pages/wizard/TruckPage_R";
-import TVPage_R from "./pages/wizard/TVPage_R";
 import RecognizePage from "./pages/wizard/RecognizePage";
 import AppLayout_R from "./pages/AppLayout";
 import LoginPage_admin from "./pages/LoginPage_admin";
@@ -31,11 +29,9 @@ export default function App() {
             </RequireAuth>
           }
         >
-          <Route index element={<Navigate to="signage" replace />} />
+          <Route index element={<Navigate to="truck" replace />} />
 
-          <Route path="signage" element={<SignagePage_R />} />
           <Route path="truck" element={<TruckPage_R />} />
-          <Route path="tv" element={<TVPage_R />} />
           <Route path="allpost" element={<RecognizePage/>} />
         </Route>
 

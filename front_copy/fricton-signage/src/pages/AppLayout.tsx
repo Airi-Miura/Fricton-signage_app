@@ -52,21 +52,10 @@ export default function AppLayout() {
           認証画面
         </NavLink>
         <NavLink
-          to="signage"
-          style={({ isActive }) => (isActive ? activeStyle : tabStyle)}
-        >
-          サイネージ管理
-        </NavLink>
-        <NavLink
           to="truck"
           style={({ isActive }) => (isActive ? activeStyle : tabStyle)}
         >
           アドトラック管理
-        </NavLink>
-        <NavLink 
-          to="tv" 
-          style={({ isActive }) => (isActive ? activeStyle : tabStyle)}>
-          大型ビジョン管理
         </NavLink>
       </div>
 
