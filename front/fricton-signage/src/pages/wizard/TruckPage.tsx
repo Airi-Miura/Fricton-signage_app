@@ -1,9 +1,10 @@
 // src/pages/wizard/TruckPage.tsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 const API_ROOT = "http://localhost:8000";
 const BOOKED_API = `${API_ROOT}/api/truck/booked`;
+const KIND = "アドトラック"; // API/DBのkindを統一
 
 // 推奨サイズ（画像）
 const REQUIRED_W_Truck = 890;
@@ -110,29 +111,26 @@ export default function TruckPage() {
 
   // 週表示
   const [anchorDate, setAnchorDate] = useState<Date>(() => {
-    const d = new Date(); 
-    d.setHours(0,0,0,0); 
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
     return d;
   });
   const mondayStart = false;
-    const weekDays = useMemo(() => {
-      const start = startOfWeek(anchorDate, mondayStart);
-      return Array.from({ length: 7 }, (_, i) => {
-        const d = new Date(start);
-        d.setDate(start.getDate() + i);
-        return d;
-      });
-    }, [anchorDate, mondayStart]);
+  const weekDays = useMemo(() => {
+    const start = startOfWeek(anchorDate, mondayStart);
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      return d;
+    });
+  }, [anchorDate, mondayStart]);
 
   const fmtWeekday = useMemo(() => new Intl.DateTimeFormat("ja-JP", { weekday: "short" }), []);
-  const fmtMonthDay = useMemo(
-      () => new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric" }),
-      []
-    );
+  const fmtMonthDay = useMemo(() => new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric" }), []);
   const slots = useMemo(() => createTimeSlots(30, 8, 22), []);
   const dayISO = weekDays.map(d => toISODate(d));
 
-  // ===== APIから予約取得（SignagePage準拠 / kind=アドトラック） =====
+  // ===== APIから予約取得（kind=アドトラック） =====
   const [booked, setBooked] = useState<Set<string>>(new Set());
   const [bookedLoading, setBookedLoading] = useState(false);
   const [bookedError, setBookedError] = useState<string | null>(null);
@@ -145,7 +143,7 @@ export default function TruckPage() {
     const qs = new URLSearchParams({
       start: toISODate(start),
       end: toISODate(end),
-      kind: "トラック",
+      kind: KIND,
     });
 
     const ctrl = new AbortController();
@@ -186,7 +184,7 @@ export default function TruckPage() {
 
   // アップロード（画像 複数 / 音声 任意 単一）
   const [otherFiles, setOtherFiles] = useState<string[]>([]);
-  const [imageFiles, setImageFiles] = useState<FileList | null>(null);
+  const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [imgPreviews, setImgPreviews] = useState<ImgPreview[]>([]);
   const [audioPreview, setAudioPreview] = useState<AudioPreview | null>(null);
@@ -200,6 +198,38 @@ export default function TruckPage() {
   const [dragMode, setDragMode] = useState<"select" | "deselect" | null>(null);
   const [dragStart, setDragStart] = useState<{ day: number; slot: number } | null>(null);
   const [dragPreview, setDragPreview] = useState<Set<string>>(new Set());
+
+  // 予約合計分数 → 画像上限（1分=1枚）
+  const reservedMinutes = useMemo(() => pickedSlots.size * 30, [pickedSlots]);
+  const maxImages = reservedMinutes;
+
+  // 初回置き換え / 追加
+  const addInputRef = useRef<HTMLInputElement | null>(null);
+  const handleInitialFiles = (files: FileList | null) => {
+    if (!files || files.length === 0) { setImageFiles([]); return; }
+    setImageFiles(Array.from(files));
+    setError("");
+  };
+  const handleAppendFiles = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setImageFiles(prev => {
+      const map = new Map(prev.map(f => [f.name + ":" + f.size + ":" + f.lastModified, f]));
+      Array.from(files).forEach(f => {
+        const key = f.name + ":" + f.size + ":" + f.lastModified;
+        if (!map.has(key)) map.set(key, f);
+      });
+      return Array.from(map.values());
+    });
+    setError("");
+  };
+  const removeAtIndex = (idx: number) => {
+    setImageFiles(prev => {
+      const next = prev.filter((_, i) => i !== idx);
+      // アクティブインデックス補正
+      setActiveImgIndex(i => Math.min(Math.max(0, i - (idx <= i ? 1 : 0)), Math.max(0, next.length - 1)));
+      return next;
+    });
+  };
 
   // --- ドラッグ選択ハンドラ ---
   useEffect(() => {
@@ -290,7 +320,7 @@ export default function TruckPage() {
     const others: string[] = [];
     const tasks: Promise<void>[] = [];
 
-    Array.from(imageFiles).forEach(file => {
+    imageFiles.forEach(file => {
       const typeOk = ALLOWED_IMAGE_TYPES.includes(file.type);
       if (file.type.startsWith("image/")) {
         const url = URL.createObjectURL(file);
@@ -303,17 +333,17 @@ export default function TruckPage() {
               imgs.push({ name: file.name, url, width: w, height: h, ok: w === REQUIRED_W_Truck && h === REQUIRED_H_Truck, typeOk });
               resolve();
             };
-            img.onerror = () => { 
-              imgs.push({ name: file.name, url, width: 0, height: 0, ok: false, typeOk }); 
-              resolve(); 
+            img.onerror = () => {
+              imgs.push({ name: file.name, url, width: 0, height: 0, ok: false, typeOk });
+              resolve();
             };
             img.src = url;
           })
         );
-      }else {
-          others.push(file.name);
-        }
-      });
+      } else {
+        others.push(file.name);
+      }
+    });
 
     Promise.all(tasks).then(() => {
       imgs.sort((a, b) => a.name.localeCompare(b.name));
@@ -321,7 +351,7 @@ export default function TruckPage() {
       setOtherFiles(others);
     });
 
-    return () => { 
+    return () => {
       imgs.forEach(p => URL.revokeObjectURL(p.url));
     };
   }, [imageFiles]);
@@ -359,6 +389,15 @@ export default function TruckPage() {
   const [activeImgIndex, setActiveImgIndex] = useState(0);
   const activeImgUrl = imgPreviews[activeImgIndex]?.url;
 
+  // 横スクロール：選択画像に自動スクロール
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const el = scroller.querySelector<HTMLElement>(`[data-idx="${activeImgIndex}"]`);
+    el?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  }, [activeImgIndex]);
+
   // --- 送信 ---
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -374,9 +413,14 @@ export default function TruckPage() {
       setError("画像ファイルを1枚以上アップロードしてください");
       return;
     }
-    const badType = Array.from(imageFiles).find(f => !ALLOWED_IMAGE_TYPES.includes(f.type));
+    const badType = imageFiles.find(f => !ALLOWED_IMAGE_TYPES.includes(f.type));
     if (badType) {
       setError("画像は jpg/jpeg/png/webp のみアップロード可能です");
+      return;
+    }
+    // 上限チェック（1分=1枚）
+    if (maxImages > 0 && imgPreviews.length > maxImages) {
+      setError(`選択した画像が上限（最大 ${maxImages} 枚）を超えています。予約時間を延長するか、画像枚数を減らしてください。`);
       return;
     }
     // 必須テキストチェック
@@ -402,22 +446,21 @@ export default function TruckPage() {
 
       // 送信（multipart/form-data）
       const fd = new FormData();
-      fd.append("kind", "トラック");
+      fd.append("kind", KIND);
       fd.append("tpl_id", tplId);
       fd.append("text_values", JSON.stringify(textValues));
       fd.append("schedule", JSON.stringify(byDate));
-      Array.from(imageFiles).forEach(f => fd.append("files_trucks", f));
-      if (audioFile) fd.append("audio", audioFile); // 音声は固有機能として維持
+      imageFiles.forEach(f => fd.append("files_trucks", f));
+      if (audioFile) fd.append("audio", audioFile); // 任意
 
-      const res = await fetch(`${API_ROOT}/api/trucks`, { 
-        method: "POST", 
-        body: fd 
+      const res = await fetch(`${API_ROOT}/api/trucks`, {
+        method: "POST",
+        body: fd
       });
 
       const txt = await res.text();
-      console.log("POST /api/truck ->", res.status, txt);
+      console.log("POST /api/trucks ->", res.status, txt);
       if (!res.ok) {
-        // サーバ側の409もここに来る
         let detail = "";
         try {
           const j = JSON.parse(txt);
@@ -475,66 +518,148 @@ export default function TruckPage() {
       {/* 1) 画像/音声アップロード */}
       <h3 style={{ marginTop: 20 }}>素材アップロード</h3>
       <div style={{ display: "grid", gap: 12, marginTop: 8 }}>
+        {/* 初回選択（置き換え）— 常時表示 */}
         <label>
           画像ファイル（複数可・推奨サイズ {REQUIRED_W_Truck}×{REQUIRED_H_Truck} ・形式：jpg/jpeg/png/webp）
           <input
             type="file"
             accept="image/jpeg,image/png,image/webp"
             multiple
-            onChange={e => { 
-              setImageFiles(e.target.files ?? null); setError(""); }}
+            onChange={e => handleInitialFiles(e.target.files)}
             style={{ display: "block", marginTop: 6 }}
           />
         </label>
 
+        {/* プレビュー（1枚以上あるとき） */}
         {imgPreviews.length > 0 && (
           <div>
-  <div style={{ fontWeight: 700, marginBottom: 6 }}>画像プレビュー</div>
-  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px,1fr))", gap: 12 }}>
-    {imgPreviews.map((p, idx) => (
-      <div key={p.url} style={{ border: "1px solid #ddd", borderRadius: 8, padding: 8, background: "#fff" }}>
-        <div
-          style={{
-            width: THUMB_W, height: THUMB_H, borderRadius: 6, background: "#f8f8f8",
-            display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", margin: "0 auto 6px",
-            outline: idx === activeImgIndex ? "2px solid #2563eb" : "none", cursor: "pointer"
-          }}
-          title="クリックでこの画像をプレビュー"
-          onClick={() => setActiveImgIndex(idx)}
-        >
-          <img src={p.url} alt={p.name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
-        </div>
-        <div style={{ fontSize: 12, wordBreak: "break-all" }}>{p.name}</div>
-        <div style={{ fontSize: 12, opacity: 0.8 }}>{p.width} × {p.height}px</div>
-        {!p.typeOk && <div style={{ color: "#b91c1c", fontSize: 12, marginTop: 4 }}>NG形式（jpg/png/webpのみ）</div>}
-        <div style={{ marginTop: 4, fontSize: 12, fontWeight: 700, color: p.ok ? "#16a34a" : "#b91c1c" }}>
-          {p.ok ? "OK（890×330）" : "NG：890×330を推奨"}
-        </div>
-      </div>
-    ))}
-  </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <div style={{ fontWeight: 700 }}>画像プレビュー</div>
+              <div style={{ fontSize: 12, color: "#6B7280" }}>
+                合計 {imgPreviews.length} 枚{reservedMinutes > 0 ? ` / 上限 ${maxImages} 枚` : ""}
+              </div>
+              <div style={{ flex: 1 }} />
+              {/* 追加ボタン */}
+              <button type="button" onClick={() => addInputRef.current?.click()}>
+                ファイルを追加
+              </button>
+              {/* 全削除 */}
+              <button
+                type="button"
+                onClick={() => setImageFiles([])}
+                style={{ background: "#ef4444", color: "#fff", border: "none", borderRadius: 6, padding: "6px 10px" }}
+              >
+                すべて削除
+              </button>
+            </div>
 
-  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-    <button onClick={() => setActiveImgIndex(i => Math.max(0, i - 1))} disabled={activeImgIndex <= 0}>◀︎ 前の画像</button>
-    <button onClick={() => setActiveImgIndex(i => Math.min(imgPreviews.length - 1, i + 1))} disabled={activeImgIndex >= imgPreviews.length - 1}>次の画像 ▶︎</button>
-  </div>
+            {/* 追加用の隠し input */}
+            <input
+              ref={addInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              multiple
+              style={{ display: "none" }}
+              onChange={(e) => {
+                handleAppendFiles(e.target.files);
+                e.currentTarget.value = "";
+              }}
+            />
 
-  {/* ▼ 追加：注意書き */}
-  <div style={{
-    marginTop: 12,
-    fontSize: 12,
-    background: "#F1F5F9",
-    border: "1px solid #E5E7EB",
-    borderRadius: 8,
-    padding: 10,
-    lineHeight: 1.6
-  }}>
-    <div>※表示は<strong>1分ごとに切替</strong>。</div>
-    <div>ご予約「分」＝<strong>アップ可能な枚数の上限</strong>（例：30分→最大30枚）。</div>
-    <div style={{ color: "#6B7280" }}>上限超過分は表示されません。</div>
-  </div>
-</div>
+            {/* 横スクロールのコンテナ */}
+            <div
+              ref={scrollerRef}
+              style={{
+                display: "flex",
+                gap: 12,
+                overflowX: "auto",
+                overflowY: "hidden",
+                paddingBottom: 8,
+                scrollSnapType: "x proximity",
+                border: "1px solid #e5e7eb",
+                borderRadius: 8,
+                padding: 8,
+                background: "#f8fafc",
+              }}
+            >
+              {imgPreviews.map((p, idx) => (
+                <div
+                  key={p.url}
+                  data-idx={idx}
+                  style={{
+                    position: "relative",
+                    flex: "0 0 220px",
+                    border: "1px solid #ddd",
+                    borderRadius: 8,
+                    padding: 8,
+                    background: "#fff",
+                    scrollSnapAlign: "center",
+                  }}
+                >
+                  {/* 個別削除 */}
+                  <button
+                    type="button"
+                    onClick={() => removeAtIndex(idx)}
+                    title="この画像を削除"
+                    style={{
+                      position: "absolute", top: 6, right: 6,
+                      border: "none", background: "#ef4444", color: "#fff",
+                      borderRadius: 6, padding: "2px 6px", cursor: "pointer", fontSize: 12
+                    }}
+                  >
+                    削除
+                  </button>
 
+                  <div
+                    style={{
+                      width: THUMB_W, height: THUMB_H, borderRadius: 6, background: "#f8f8f8",
+                      display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", margin: "0 auto 6px",
+                      outline: idx === activeImgIndex ? "2px solid #2563eb" : "none", cursor: "pointer"
+                    }}
+                    title="クリックでこの画像をプレビュー"
+                    onClick={() => setActiveImgIndex(idx)}
+                  >
+                    <img src={p.url} alt={p.name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                  </div>
+                  <div style={{ fontSize: 12, wordBreak: "break-all" }}>{p.name}</div>
+                  <div style={{ fontSize: 12, opacity: 0.8 }}>{p.width} × {p.height}px</div>
+                  {!p.typeOk && <div style={{ color: "#b91c1c", fontSize: 12, marginTop: 4 }}>NG形式（jpg/png/webpのみ）</div>}
+                  <div style={{ marginTop: 4, fontSize: 12, fontWeight: 700, color: p.ok ? "#16a34a" : "#b91c1c" }}>
+                    {p.ok ? "OK（890×330）" : "NG：890×330を推奨"}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button onClick={() => setActiveImgIndex(i => Math.max(0, i - 1))} disabled={activeImgIndex <= 0}>◀︎ 前の画像</button>
+              <button onClick={() => setActiveImgIndex(i => Math.min(imgPreviews.length - 1, i + 1))} disabled={activeImgIndex >= imgPreviews.length - 1}>次の画像 ▶︎</button>
+            </div>
+
+            {/* 注意書き + 上限表示 */}
+            <div style={{
+              marginTop: 12,
+              fontSize: 12,
+              background: "#F1F5F9",
+              border: "1px solid #E5E7EB",
+              borderRadius: 8,
+              padding: 10,
+              lineHeight: 1.6
+            }}>
+              <div>※表示は<strong>1分ごとに切替</strong>。</div>
+              <div>
+                ご予約「分」＝<strong>アップ可能な枚数の上限</strong>
+                {reservedMinutes > 0 && <>（この予約では <strong>最大 {maxImages} 枚</strong>）</>}
+                。
+              </div>
+              <div style={{ color: "#6B7280" }}>上限超過分は表示されません。</div>
+              {reservedMinutes > 0 && imgPreviews.length > maxImages && (
+                <div style={{ marginTop: 6, color: "#b91c1c", fontWeight: 700 }}>
+                  現在の選択枚数（{imgPreviews.length}枚）が上限（{maxImages}枚）を超えています。
+                </div>
+              )}
+            </div>
+          </div>
         )}
 
         {/* 音声（単一・任意） */}
@@ -747,4 +872,3 @@ export default function TruckPage() {
     </div>
   );
 }
-
