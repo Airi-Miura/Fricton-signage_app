@@ -206,8 +206,8 @@ export default function TruckPage() {
   // 初回置き換え / 追加
   const addInputRef = useRef<HTMLInputElement | null>(null);
   const handleInitialFiles = (files: FileList | null) => {
-    if (!files || files.length === 0) { setImageFiles([]); return; }
-    setImageFiles(Array.from(files));
+    if (!files || files.length === 0) return;
+    setImageFiles(prev => [...prev, ...Array.from(files)]);
     setError("");
   };
   const handleAppendFiles = (files: FileList | null) => {
@@ -308,10 +308,8 @@ export default function TruckPage() {
 
   // --- 画像プレビュー生成（タイプ制限＆実寸チェック） ---
   useEffect(() => {
-    setImgPreviews(prev => {
-      prev.forEach(p => URL.revokeObjectURL(p.url));
-      return [];
-    });
+    // 以前のURLを解放
+    setImgPreviews(prev => { prev.forEach(p => URL.revokeObjectURL(p.url)); return []; });
     setOtherFiles([]);
 
     if (!imageFiles || imageFiles.length === 0) return;
@@ -321,8 +319,11 @@ export default function TruckPage() {
     const tasks: Promise<void>[] = [];
 
     imageFiles.forEach(file => {
-      const typeOk = ALLOWED_IMAGE_TYPES.includes(file.type);
-      if (file.type.startsWith("image/")) {
+      // MIME が空でも拡張子で画像判定
+      const isImage = (file.type && file.type.startsWith("image/")) || /\.(jpe?g|png|webp)$/i.test(file.name);
+      const typeOk = ALLOWED_IMAGE_TYPES.includes(file.type) || /\.(jpe?g|png|webp)$/i.test(file.name);
+
+      if (isImage) {
         const url = URL.createObjectURL(file);
         tasks.push(
           new Promise<void>(resolve => {
@@ -345,15 +346,16 @@ export default function TruckPage() {
       }
     });
 
+    let cancelled = false;
     Promise.all(tasks).then(() => {
+      if (cancelled) return;
       imgs.sort((a, b) => a.name.localeCompare(b.name));
       setImgPreviews(imgs);
       setOtherFiles(others);
     });
 
-    return () => {
-      imgs.forEach(p => URL.revokeObjectURL(p.url));
-    };
+    // ★ cleanupでURLをrevokeしない（StrictModeのダブル実行で即消えるため）
+    return () => { cancelled = true; };
   }, [imageFiles]);
 
   // --- 音声プレビュー生成（単一） ---
@@ -413,7 +415,7 @@ export default function TruckPage() {
       setError("画像ファイルを1枚以上アップロードしてください");
       return;
     }
-    const badType = imageFiles.find(f => !ALLOWED_IMAGE_TYPES.includes(f.type));
+    const badType = imageFiles.find(f => !ALLOWED_IMAGE_TYPES.includes(f.type) && !/\.(jpe?g|png|webp)$/i.test(f.name));
     if (badType) {
       setError("画像は jpg/jpeg/png/webp のみアップロード可能です");
       return;
@@ -629,11 +631,6 @@ export default function TruckPage() {
                   </div>
                 </div>
               ))}
-            </div>
-
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <button onClick={() => setActiveImgIndex(i => Math.max(0, i - 1))} disabled={activeImgIndex <= 0}>◀︎ 前の画像</button>
-              <button onClick={() => setActiveImgIndex(i => Math.min(imgPreviews.length - 1, i + 1))} disabled={activeImgIndex >= imgPreviews.length - 1}>次の画像 ▶︎</button>
             </div>
 
             {/* 注意書き + 上限表示 */}
