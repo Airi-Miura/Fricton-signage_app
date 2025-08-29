@@ -204,12 +204,15 @@ export default function TruckPage() {
   const maxImages = reservedMinutes;
 
   // 初回置き換え / 追加
-  const addInputRef = useRef<HTMLInputElement | null>(null);
   const handleInitialFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return;
     setImageFiles(prev => [...prev, ...Array.from(files)]);
     setError("");
   };
+
+  
+  const appendInputRef = useRef<HTMLInputElement | null>(null);
+
   const handleAppendFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return;
     setImageFiles(prev => {
@@ -541,10 +544,29 @@ export default function TruckPage() {
                 合計 {imgPreviews.length} 枚{reservedMinutes > 0 ? ` / 上限 ${maxImages} 枚` : ""}
               </div>
               <div style={{ flex: 1 }} />
-              {/* 追加ボタン */}
-              <button type="button" onClick={() => addInputRef.current?.click()}>
+              
+              {/* 追加ボタン → 隠し input を click */}
+              <button
+                type="button"
+                onClick={() => appendInputRef.current?.click()}
+              >
                 ファイルを追加
               </button>
+              
+              {/* 追加用の隠し input */}
+            <input
+              id="append-files"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              multiple
+              style={{ position: "fixed", left: -9999, width: 1, height: 1, opacity: 0 }}
+              onChange={(e) => {
+                handleAppendFiles(e.currentTarget.files);
+                // 同じファイルを続けて選んでも change が発火するようにリセット
+                e.currentTarget.value = "";
+              }}
+            />
+
               {/* 全削除 */}
               <button
                 type="button"
@@ -554,19 +576,6 @@ export default function TruckPage() {
                 すべて削除
               </button>
             </div>
-
-            {/* 追加用の隠し input */}
-            <input
-              ref={addInputRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              multiple
-              style={{ display: "none" }}
-              onChange={(e) => {
-                handleAppendFiles(e.target.files);
-                e.currentTarget.value = "";
-              }}
-            />
 
             {/* 横スクロールのコンテナ */}
             <div
