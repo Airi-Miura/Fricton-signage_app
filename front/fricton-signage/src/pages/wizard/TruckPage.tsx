@@ -213,18 +213,6 @@ export default function TruckPage() {
   
   const appendInputRef = useRef<HTMLInputElement | null>(null);
 
-  const handleAppendFiles = (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    setImageFiles(prev => {
-      const map = new Map(prev.map(f => [f.name + ":" + f.size + ":" + f.lastModified, f]));
-      Array.from(files).forEach(f => {
-        const key = f.name + ":" + f.size + ":" + f.lastModified;
-        if (!map.has(key)) map.set(key, f);
-      });
-      return Array.from(map.values());
-    });
-    setError("");
-  };
   const removeAtIndex = (idx: number) => {
     setImageFiles(prev => {
       const next = prev.filter((_, i) => i !== idx);
@@ -527,6 +515,7 @@ export default function TruckPage() {
         <label>
           画像ファイル（複数可・推奨サイズ {REQUIRED_W_Truck}×{REQUIRED_H_Truck} ・形式：jpg/jpeg/png/webp）
           <input
+            ref={appendInputRef} 
             type="file"
             accept="image/jpeg,image/png,image/webp"
             multiple
@@ -545,27 +534,23 @@ export default function TruckPage() {
               </div>
               <div style={{ flex: 1 }} />
               
-              {/* 追加ボタン → 隠し input を click */}
+              {/*追加ボタン → 隠し input を click*/}
               <button
                 type="button"
                 onClick={() => appendInputRef.current?.click()}
               >
                 ファイルを追加
               </button>
-              
-              {/* 追加用の隠し input */}
-            <input
-              id="append-files"
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              multiple
-              style={{ position: "fixed", left: -9999, width: 1, height: 1, opacity: 0 }}
-              onChange={(e) => {
-                handleAppendFiles(e.currentTarget.files);
-                // 同じファイルを続けて選んでも change が発火するようにリセット
-                e.currentTarget.value = "";
-              }}
-            />
+
+              {/* 追加用の隠し input（← ref を付ける） */}
+              <input
+                ref={appendInputRef} 
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                multiple
+                onChange={e => handleInitialFiles(e.target.files)}
+                style={{ display: "block", marginTop: 6 }}
+              />
 
               {/* 全削除 */}
               <button
