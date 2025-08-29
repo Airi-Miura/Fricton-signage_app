@@ -17,6 +17,24 @@ services:
       timeout: 3s
       retries: 10
 
+  # ★ 追加：管理者認証専用DB（物理分離）
+  admin-db:
+    image: postgres:16
+    container_name: fs-admin-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: admin_auth
+      POSTGRES_PASSWORD: secret_admin
+      POSTGRES_DB: admin_auth_db
+    # 外部公開は不要なら ports を省略OK（必要なら "5433:5432" など）
+    volumes:
+      - admin_dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin_auth -d admin_auth_db -h 127.0.0.1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   adminer:
     image: adminer:latest
     container_name: fs-adminer
@@ -26,32 +44,47 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # ★ 管理DBにも接続したい場合
+      admin-db:
+        condition: service_healthy
 
   api:
-    build: ./app        
+    build: ./app
     container_name: fs-api
     restart: unless-stopped
     environment:
+      # --- アプリDB（業務データ＋一般ユーザー） ---
       DB_HOST: db
       DB_PORT: "5432"
       DB_NAME: appdb
       DB_USER: app
       DB_PASS: secret
-      ADMIN_SEED: "admin:Temp#1234,Admin User,admin"
+
+      # --- ★ 管理者認証DB（物理分離） ---
+      # FastAPI 側の ADMIN_AUTH_DATABASE_URL を使う実装に合わせる
+      ADMIN_AUTH_DATABASE_URL: "postgresql://admin_auth:secret_admin@admin-db:5432/admin_auth_db"
+
+      # --- JWT/CORS 等 ---
       JWT_SECRET: "change_me_please"
       API_ORIGIN: "http://localhost:8000"
+      # ※ 旧 YAML/SEED 系は削除（このAPIでは未使用）
+      # ADMIN_SEED: （削除）
+
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
+      # ★ 管理者DBの起動も待つ
+      admin-db:
+        condition: service_healthy
 
   front:
-    build: ./front         
+    build: ./front
     container_name: fs-front
     restart: unless-stopped
     ports:
-      - "3000:80"          
+      - "3000:80"
     depends_on:
       - api
 
@@ -61,9 +94,10 @@ services:
     restart: unless-stopped
     ports:
       - "3002:80"
-    depends_on: 
+    depends_on:
       - api
-
 
 volumes:
   dbdata:
+  # ★ 追加：管理者認証DBのデータ永続化
+  admin_dbdata:

@@ -1,5 +1,20 @@
-import { useEffect, useState } from "react";
+// src/pages/LoginPage.tsx（front-copy / 管理者用）
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+
+type LoginResp = {
+  ok: boolean;
+  username: string;
+  name?: string;
+  role?: string;   // 期待: "admin"
+  token?: string;
+};
+
+const API_ROOT =
+  (import.meta as any)?.env?.VITE_ADMIN_API_ROOT ?? "http://localhost:8000";
+// ★ 一般ログインではなく管理ログインのエンドポイントにする
+const ADMIN_LOGIN_URL = `${API_ROOT}/api/auth/admin-login`;
+const ADMIN_DEST = "/app/truck";
 
 export default function LoginPage() {
   const nav = useNavigate();
@@ -7,13 +22,6 @@ export default function LoginPage() {
   const [pw, setPw] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-
-  // 既にログイン済みならタブ画面へ
-  useEffect(() => {
-    if (localStorage.getItem("auth") === "ok") {
-      nav("/app/truck", { replace: true });
-    }
-  }, [nav]);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,23 +34,33 @@ export default function LoginPage() {
 
     setLoading(true);
     try {
-      const res = await fetch("http://localhost:8000/api/auth/login", {
+      const res = await fetch(ADMIN_LOGIN_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // バックエンドは username / password を受け取る想定
         body: JSON.stringify({ username: email, password: pw }),
       });
 
-      if (!res.ok) {
+      const data: LoginResp = await res.json().catch(() => ({ ok: false } as LoginResp));
+      if (!res.ok || !data.ok) {
         if (res.status === 401) throw new Error("IDまたはパスワードが違います");
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "ログインに失敗しました");
+        throw new Error((data as any)?.detail || "ログインに失敗しました");
       }
 
-      const data = await res.json(); // { ok: true, user_id, username, name }
+      // ★ 管理トークン保存（role=admin を前提）
       localStorage.setItem("auth", "ok");
-      localStorage.setItem("user", JSON.stringify(data));
-      nav("/app/truck", { replace: true });
+      localStorage.setItem(
+        "user",
+        JSON.stringify({
+          username: data.username,
+          name: data.name ?? "",
+          role: data.role ?? "admin",
+          token: data.token ?? "",
+        })
+      );
+
+      // ★ 成功時のみ明示的に遷移（自動リダイレクトはしない）
+      nav(ADMIN_DEST, { replace: true });
     } catch (e: any) {
       setErr(e.message || "ログインに失敗しました");
     } finally {
@@ -64,7 +82,7 @@ export default function LoginPage() {
         }}
       >
         <h1 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>
-          FRICTON-SIGNAGE ログイン
+          FRICTON-SIGNAGE 管理者ログイン
         </h1>
 
         <label style={{ display: "block", marginBottom: 8 }}>
@@ -104,7 +122,7 @@ export default function LoginPage() {
             width: "100%",
             padding: 12,
             borderRadius: 8,
-            background: "#2563eb",
+            background: "#111827",
             color: "#fff",
             fontWeight: 700,
             border: "none",
@@ -112,7 +130,7 @@ export default function LoginPage() {
             opacity: loading ? 0.7 : 1,
           }}
         >
-          {loading ? "ログイン中..." : "ログイン"}
+          {loading ? "ログイン中..." : "管理者としてログイン"}
         </button>
       </form>
     </div>

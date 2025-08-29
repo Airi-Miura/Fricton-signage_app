@@ -385,7 +385,7 @@ export default function TruckPage() {
       setError(`必須テキスト（${missing.map(m => m.label).join("、")}）を入力してください`);
       return;
     }
-    // 予約重複チェック（SignagePage準拠）
+    // 予約重複チェック
     const conflicts = Array.from(pickedSlots).filter(k => booked.has(k));
     if (conflicts.length > 0) {
       setError("既に予約済みの時間帯が含まれています。別の時間を選んでください。");
