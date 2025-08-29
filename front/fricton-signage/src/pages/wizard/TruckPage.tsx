@@ -489,35 +489,52 @@ export default function TruckPage() {
 
         {imgPreviews.length > 0 && (
           <div>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>画像プレビュー</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px,1fr))", gap: 12 }}>
-              {imgPreviews.map((p, idx) => (
-                <div key={p.url} style={{ border: "1px solid #ddd", borderRadius: 8, padding: 8, background: "#fff" }}>
-                  <div
-                    style={{
-                      width: THUMB_W, height: THUMB_H, borderRadius: 6, background: "#f8f8f8",
-                      display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", margin: "0 auto 6px",
-                      outline: idx === activeImgIndex ? "2px solid #2563eb" : "none", cursor: "pointer"
-                    }}
-                    title="クリックでこの画像をプレビュー"
-                    onClick={() => setActiveImgIndex(idx)}
-                  >
-                    <img src={p.url} alt={p.name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
-                  </div>
-                  <div style={{ fontSize: 12, wordBreak: "break-all" }}>{p.name}</div>
-                  <div style={{ fontSize: 12, opacity: 0.8 }}>{p.width} × {p.height}px</div>
-                  {!p.typeOk && <div style={{ color: "#b91c1c", fontSize: 12, marginTop: 4 }}>NG形式（jpg/png/webpのみ）</div>}
-                  <div style={{ marginTop: 4, fontSize: 12, fontWeight: 700, color: p.ok ? "#16a34a" : "#b91c1c" }}>
-                    {p.ok ? "OK（890×330）" : "NG：890×330を推奨"}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <button onClick={() => setActiveImgIndex(i => Math.max(0, i - 1))} disabled={activeImgIndex <= 0}>◀︎ 前の画像</button>
-              <button onClick={() => setActiveImgIndex(i => Math.min(imgPreviews.length - 1, i + 1))} disabled={activeImgIndex >= imgPreviews.length - 1}>次の画像 ▶︎</button>
-            </div>
-          </div>
+  <div style={{ fontWeight: 700, marginBottom: 6 }}>画像プレビュー</div>
+  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px,1fr))", gap: 12 }}>
+    {imgPreviews.map((p, idx) => (
+      <div key={p.url} style={{ border: "1px solid #ddd", borderRadius: 8, padding: 8, background: "#fff" }}>
+        <div
+          style={{
+            width: THUMB_W, height: THUMB_H, borderRadius: 6, background: "#f8f8f8",
+            display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", margin: "0 auto 6px",
+            outline: idx === activeImgIndex ? "2px solid #2563eb" : "none", cursor: "pointer"
+          }}
+          title="クリックでこの画像をプレビュー"
+          onClick={() => setActiveImgIndex(idx)}
+        >
+          <img src={p.url} alt={p.name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+        </div>
+        <div style={{ fontSize: 12, wordBreak: "break-all" }}>{p.name}</div>
+        <div style={{ fontSize: 12, opacity: 0.8 }}>{p.width} × {p.height}px</div>
+        {!p.typeOk && <div style={{ color: "#b91c1c", fontSize: 12, marginTop: 4 }}>NG形式（jpg/png/webpのみ）</div>}
+        <div style={{ marginTop: 4, fontSize: 12, fontWeight: 700, color: p.ok ? "#16a34a" : "#b91c1c" }}>
+          {p.ok ? "OK（890×330）" : "NG：890×330を推奨"}
+        </div>
+      </div>
+    ))}
+  </div>
+
+  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+    <button onClick={() => setActiveImgIndex(i => Math.max(0, i - 1))} disabled={activeImgIndex <= 0}>◀︎ 前の画像</button>
+    <button onClick={() => setActiveImgIndex(i => Math.min(imgPreviews.length - 1, i + 1))} disabled={activeImgIndex >= imgPreviews.length - 1}>次の画像 ▶︎</button>
+  </div>
+
+  {/* ▼ 追加：注意書き */}
+  <div style={{
+    marginTop: 12,
+    fontSize: 12,
+    background: "#F1F5F9",
+    border: "1px solid #E5E7EB",
+    borderRadius: 8,
+    padding: 10,
+    lineHeight: 1.6
+  }}>
+    <div>※表示は<strong>1分ごとに切替</strong>。</div>
+    <div>ご予約「分」＝<strong>アップ可能な枚数の上限</strong>（例：30分→最大30枚）。</div>
+    <div style={{ color: "#6B7280" }}>上限超過分は表示されません。</div>
+  </div>
+</div>
+
         )}
 
         {/* 音声（単一・任意） */}
