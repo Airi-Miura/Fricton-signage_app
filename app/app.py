@@ -328,33 +328,23 @@ def login_user(p: LoginIn):
 
 # ---- 管理者ログイン（admin_users：管理認証DBのみ参照）----
 @app.post("/api/auth/admin-login")
-@app.post("/api/auth/admin/login")
 def admin_login(p: LoginIn):
-    uname = p.username.strip()
+    uname = (p.username or "").strip()
     with engine_admin.begin() as conn:
-        row = conn.execute(
-            text("""
+        row = conn.execute(text("""
             SELECT id, username, display_name, password_hash, is_active
-            FROM admin_users
-            WHERE lower(username)=lower(:u)
-            LIMIT 1
-            """),
-            {"u": uname}
-        ).mappings().first()
-
-    if not row or not pwd_ctx.verify(p.password, row["password_hash"]):
+            FROM admin_users WHERE lower(username)=lower(:u) LIMIT 1
+        """), {"u": uname}).mappings().first()
+    if not row:
+        raise HTTPException(status_code=401, detail="invalid credentials")
+    if not pwd_ctx.verify(p.password, row["password_hash"]):
         raise HTTPException(status_code=401, detail="invalid credentials")
     if not row["is_active"]:
         raise HTTPException(status_code=403, detail="inactive user")
 
     token = create_access_token(sub=str(row["id"]), username=row["username"], role="admin")
-    return {
-        "ok": True,
-        "username": row["username"],
-        "name": row.get("display_name") or row["username"],
-        "role": "admin",
-        "token": token,
-    }
+    return {"ok": True, "username": row["username"], "name": row.get("display_name") or "", "role": "admin", "token": token}
+
 
 # =============================
 # 配信申請の受付（画像＋スケジュール保存）
@@ -569,77 +559,39 @@ class AdminRenameIn(BaseModel):
 def admin_me(claims=Depends(require_admin)):
     uid = int(claims["sub"])
     with engine_admin.begin() as conn:
-        row = conn.execute(
-            text("""
-                SELECT id, username, display_name, is_active
-                  FROM admin_users
-                 WHERE id=:id
-                 LIMIT 1
-            """),
-            {"id": uid}
-        ).mappings().first()
-        if not row:
-            raise HTTPException(status_code=403, detail="not allowed")
-        return {
-            "id": int(row["id"]),
-            "username": row["username"],
-            "display_name": row.get("display_name"),
-            "is_active": bool(row["is_active"]),
-        }
+        row = conn.execute(text("""
+            SELECT id, username, display_name, is_active
+            FROM admin_users WHERE id=:id LIMIT 1
+        """), {"id": uid}).mappings().first()
+    if not row: raise HTTPException(status_code=403, detail="not allowed")
+    return {"id": int(row["id"]), "username": row["username"], "display_name": row.get("display_name"), "is_active": bool(row["is_active"])}
 
-
-# ==== 追加: パスワード変更 ====
 @app.post("/api/auth/admin/change_password")
 def change_admin_password(p: AdminPwChangeIn, claims=Depends(require_admin)):
     uid = int(claims["sub"])
     if len(p.new_password or "") < 6:
         raise HTTPException(status_code=400, detail="new password too short")
     with engine_admin.begin() as conn:
-        row = conn.execute(
-            text("SELECT password_hash FROM admin_users WHERE id=:id"),
-            {"id": uid}
-        ).first()
-        if not row:
-            raise HTTPException(status_code=403, detail="not allowed")
+        row = conn.execute(text("SELECT password_hash FROM admin_users WHERE id=:id"), {"id": uid}).first()
+        if not row: raise HTTPException(status_code=403, detail="not allowed")
         if not pwd_ctx.verify(p.current_password, row[0]):
             raise HTTPException(status_code=401, detail="current password mismatch")
-        new_hash = pwd_ctx.hash(p.new_password)
-        conn.execute(
-            text("UPDATE admin_users SET password_hash=:h WHERE id=:id"),
-            {"h": new_hash, "id": uid}
-        )
+        conn.execute(text("UPDATE admin_users SET password_hash=:h WHERE id=:id"),
+                     {"h": pwd_ctx.hash(p.new_password), "id": uid})
     return {"ok": True}
 
-
-# ==== 追加: ユーザー名(ID)変更 ====
 @app.post("/api/auth/admin/rename")
 def rename_admin_username(p: AdminRenameIn, claims=Depends(require_admin)):
     uid = int(claims["sub"])
     new_uname = (p.new_username or "").strip()
-    if not new_uname:
-        raise HTTPException(status_code=400, detail="username is required")
+    if not new_uname: raise HTTPException(status_code=400, detail="username is required")
     with engine_admin.begin() as conn:
-        # 現パスワード照合
-        row = conn.execute(
-            text("SELECT password_hash FROM admin_users WHERE id=:id"),
-            {"id": uid}
-        ).first()
-        if not row:
-            raise HTTPException(status_code=403, detail="not allowed")
+        row = conn.execute(text("SELECT password_hash FROM admin_users WHERE id=:id"), {"id": uid}).first()
+        if not row: raise HTTPException(status_code=403, detail="not allowed")
         if not pwd_ctx.verify(p.current_password, row[0]):
             raise HTTPException(status_code=401, detail="auth failed")
-
-        # 重複チェック
-        exists = conn.execute(
-            text("SELECT 1 FROM admin_users WHERE lower(username)=lower(:u) AND id <> :id LIMIT 1"),
-            {"u": new_uname, "id": uid}
-        ).first()
-        if exists:
-            raise HTTPException(status_code=409, detail="username already exists")
-
-        conn.execute(
-            text("UPDATE admin_users SET username=:u WHERE id=:id"),
-            {"u": new_uname, "id": uid}
-        )
-    # フロントで localStorage を更新しやすいように返す
+        exists = conn.execute(text("SELECT 1 FROM admin_users WHERE lower(username)=lower(:u) AND id<>:id LIMIT 1"),
+                              {"u": new_uname, "id": uid}).first()
+        if exists: raise HTTPException(status_code=409, detail="username already exists")
+        conn.execute(text("UPDATE admin_users SET username=:u WHERE id=:id"), {"u": new_uname, "id": uid})
     return {"ok": True, "username": new_uname}
