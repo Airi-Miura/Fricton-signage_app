@@ -340,7 +340,6 @@ export default function TruckPage() {
     let cancelled = false;
     Promise.all(tasks).then(() => {
       if (cancelled) return;
-      imgs.sort((a, b) => a.name.localeCompare(b.name));
       setImgPreviews(imgs);
       setOtherFiles(others);
     });
