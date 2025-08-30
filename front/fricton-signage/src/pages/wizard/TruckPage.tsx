@@ -542,16 +542,6 @@ export default function TruckPage() {
                 ファイルを追加
               </button>
 
-              {/* 追加用の隠し input（← ref を付ける） */}
-              <input
-                ref={appendInputRef} 
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                multiple
-                onChange={e => handleInitialFiles(e.target.files)}
-                style={{ display: "block", marginTop: 6 }}
-              />
-
               {/* 全削除 */}
               <button
                 type="button"
@@ -561,6 +551,18 @@ export default function TruckPage() {
                 すべて削除
               </button>
             </div>
+
+            {/* 追加用の隠し input（← ref を付ける） */}
+              <input
+                ref={appendInputRef} 
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                multiple
+                aria-hidden="true"
+                tabIndex={-1}
+                onChange={e => handleInitialFiles(e.target.files)}
+                style={{ display: "block", marginTop: 6 }}
+              />
 
             {/* 横スクロールのコンテナ */}
             <div
@@ -847,7 +849,7 @@ export default function TruckPage() {
               );
             })}
           </div>
-        ))}
+        ))}1
       </div>
 
       {error && <div style={{ color: "red", marginTop: 8 }}>{error}</div>}
