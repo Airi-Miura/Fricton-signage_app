@@ -552,18 +552,6 @@ export default function TruckPage() {
               </button>
             </div>
 
-            {/* 追加用の隠し input（← ref を付ける） */}
-              <input
-                ref={appendInputRef} 
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                multiple
-                aria-hidden="true"
-                tabIndex={-1}
-                onChange={e => handleInitialFiles(e.target.files)}
-                style={{ display: "block", marginTop: 6 }}
-              />
-
             {/* 横スクロールのコンテナ */}
             <div
               ref={scrollerRef}
