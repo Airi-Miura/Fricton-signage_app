@@ -10,11 +10,31 @@ type Submission = {
 
 type Reviewed = Submission & { status: "approved" | "rejected"; decidedAt: string };
 
+// ===== 追加: API ベースURLと認証ヘッダ =====
+const API_ROOT =
+  (import.meta as any)?.env?.VITE_API_ROOT ?? "http://localhost:8000"; // 例: http://localhost:8000
+const TOKEN_KEY = "token"; // 管理ログインで保存している想定（なければ未付与でOK）
+
+const authHeaders = (): HeadersInit => {
+  const t = typeof window !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null;
+  return t ? { Authorization: `Bearer ${t}` } : {};
+};
+const apiGet = async (path: string, signal?: AbortSignal) => {
+  const res = await fetch(`${API_ROOT}${path}`, { signal, headers: { ...authHeaders() } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res;
+};
+const apiPost = async (path: string) => {
+  const res = await fetch(`${API_ROOT}${path}`, { method: "POST", headers: { ...authHeaders() } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res;
+};
+
+
 export default function AdminAuthPage() {
   // 上段：未認証（待機中）
   const [pending, setPending] = useState<Submission[]>([]);
   // 下段：処理済み（認証 or 非認証）
-  
   const [reviewed, setReviewed] = useState<Reviewed[]>([]);
   // UI状態
   const [loading, setLoading] = useState(false);
@@ -39,9 +59,8 @@ export default function AdminAuthPage() {
   async function fetchPending(signal?: AbortSignal) {
     setLoading(true);
     try {
-      // ★本番APIに差し替え：status=pending の一覧を返す
-      const res = await fetch("/api/admin/review/queue?status=pending", { signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // ★ 絶対URL + （あれば）Bearer 付与
+      const res = await apiGet("/api/admin/review/queue?status=pending", signal);
       const list: Submission[] = await res.json();
       setPending(list);
     } catch (e) {
@@ -69,9 +88,8 @@ export default function AdminAuthPage() {
     const item = pending.find(p => p.id === id);
     if (!item) return;
     try {
-      // ★本番APIに差し替え
-      const res = await fetch(`/api/admin/review/${id}/approve`, { method: "POST" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // ★ 絶対URL + （あれば）Bearer 付与
+      await apiPost(`/api/admin/review/${id}/approve`);
       // 楽観的更新：上から外し、下に流す
       setPending(prev => prev.filter(p => p.id !== id));
       setReviewed(prev => [
@@ -93,9 +111,8 @@ export default function AdminAuthPage() {
     const item = pending.find(p => p.id === id);
     if (!item) return;
     try {
-      // ★本番APIに差し替え
-      const res = await fetch(`/api/admin/review/${id}/reject`, { method: "POST" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // ★ 絶対URL + （あれば）Bearer 付与
+      await apiPost(`/api/admin/review/${id}/reject`);
       setPending(prev => prev.filter(p => p.id !== id));
       setReviewed(prev => [
         { ...item, status: "rejected", decidedAt: new Date().toISOString() },

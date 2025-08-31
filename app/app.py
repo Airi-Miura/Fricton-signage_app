@@ -123,6 +123,34 @@ def init_app_db_with_retry():
         );
         """))
 
+        # ← 不足分: 審査用カラムを足す（存在しなければ）
+        conn.execute(text("""
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='submissions' AND column_name='status'
+          ) THEN
+            ALTER TABLE submissions ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';
+            CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status);
+          END IF;
+
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='submissions' AND column_name='decided_at'
+          ) THEN
+            ALTER TABLE submissions ADD COLUMN decided_at TIMESTAMPTZ NULL;
+          END IF;
+
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='submissions' AND column_name='company_name'
+          ) THEN
+            ALTER TABLE submissions ADD COLUMN company_name TEXT NOT NULL DEFAULT '';
+          END IF;
+        END $$;
+        """))
+
         # submission_files
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS submission_files(
@@ -345,7 +373,6 @@ def admin_login(p: LoginIn):
     token = create_access_token(sub=str(row["id"]), username=row["username"], role="admin")
     return {"ok": True, "username": row["username"], "name": row.get("display_name") or "", "role": "admin", "token": token}
 
-
 # =============================
 # 配信申請の受付（画像＋スケジュール保存）
 # =============================
@@ -537,8 +564,6 @@ def get_booked_slots_truck(
     return out
 
 # ==== 追加: スキーマ ====
-from pydantic import BaseModel, Field
-
 class AdminMeOut(BaseModel):
     id: int
     username: str
@@ -552,7 +577,6 @@ class AdminPwChangeIn(BaseModel):
 class AdminRenameIn(BaseModel):
     current_password: str = Field(..., min_length=1)
     new_username: str = Field(..., min_length=3, max_length=64)
-
 
 # ==== 追加: 管理者の自己情報取得 ====
 @app.get("/api/auth/admin/me", response_model=AdminMeOut)
@@ -595,3 +619,88 @@ def rename_admin_username(p: AdminRenameIn, claims=Depends(require_admin)):
         if exists: raise HTTPException(status_code=409, detail="username already exists")
         conn.execute(text("UPDATE admin_users SET username=:u WHERE id=:id"), {"u": new_uname, "id": uid})
     return {"ok": True, "username": new_uname}
+
+# =========================================================
+# 追加: 管理審査API（フロントが参照する3エンドポイント）
+# =========================================================
+
+def _file_path_to_url(p: Optional[str]) -> str:
+    """
+    submission_files.path には "./uploads/xxxx.png" のようなパスが入る実装。
+    表示用URLは {API_ORIGIN}/uploads/<ファイル名> に正規化する。
+    """
+    if not p:
+        return ""
+    name = Path(p).name
+    return f"{API_ORIGIN}/uploads/{name}"
+
+class SubmissionOut(BaseModel):
+    id: int
+    companyName: str
+    imageUrl: str
+    title: str | None = None
+    submittedAt: str  # ISO
+
+@app.get("/api/admin/review/queue", response_model=List[SubmissionOut])
+def list_review_queue(status: str = Query("pending"), claims=Depends(require_admin)):
+    st = (status or "pending").lower()
+    if st not in ("pending", "approved", "rejected"):
+        raise HTTPException(status_code=400, detail="invalid status")
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT s.id,
+                   NULLIF(s.company_name, '') AS company_name,
+                   s.title,
+                   s.created_at,
+                   (
+                     SELECT sf.path
+                       FROM submission_files sf
+                      WHERE sf.submission_id = s.id
+                      ORDER BY sf.id ASC
+                      LIMIT 1
+                   ) AS first_path
+              FROM submissions s
+             WHERE s.status = :st
+             ORDER BY s.created_at DESC
+        """), {"st": st}).mappings().all()
+
+    out: List[SubmissionOut] = []
+    for r in rows:
+        company = r["company_name"] or r["title"] or ""
+        image_url = _file_path_to_url(r["first_path"])
+        submitted_at = (r["created_at"] or datetime.utcnow()).isoformat()
+        out.append(SubmissionOut(
+            id=int(r["id"]),
+            companyName=company,
+            imageUrl=image_url,
+            title=r["title"],
+            submittedAt=submitted_at
+        ))
+    return out
+
+@app.post("/api/admin/review/{submission_id}/approve")
+def approve_submission(submission_id: int, claims=Depends(require_admin)):
+    with engine.begin() as conn:
+        row = conn.execute(text("SELECT status FROM submissions WHERE id=:id"), {"id": submission_id}).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="not found")
+        # 既に確定済みでも上書きは許容（必要ならガード）
+        conn.execute(text("""
+            UPDATE submissions
+               SET status='approved', decided_at=now()
+             WHERE id=:id
+        """), {"id": submission_id})
+    return {"ok": True}
+
+@app.post("/api/admin/review/{submission_id}/reject")
+def reject_submission(submission_id: int, claims=Depends(require_admin)):
+    with engine.begin() as conn:
+        row = conn.execute(text("SELECT status FROM submissions WHERE id=:id"), {"id": submission_id}).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="not found")
+        conn.execute(text("""
+            UPDATE submissions
+               SET status='rejected', decided_at=now()
+             WHERE id=:id
+        """), {"id": submission_id})
+    return {"ok": True}

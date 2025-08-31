@@ -576,8 +576,6 @@ export default function TruckPage() {
         }
       `}</style>
 
-      <h2>アドトラック</h2>
-
       {/* 0) テンプレ選択 */}
       <h3 style={{ marginTop: 8 }}>テンプレートを選択</h3>
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(240px, 1fr))", gap: 10, marginTop: 8 }}>
