@@ -41,7 +41,7 @@ const TEMPLATES: Template[] = [
   {
     id: "simple-right-image",
     name: "タイトル、本文、フッダー",
-    background: { type: "image", value: "/signage_sample1_resized.png" },
+    background: { type: "image", value: "/fricton-verA.png" },
     imageBox: { x: 0, y: 0, w: 100, h: 100, mode: "cover" },
     textBoxes: [
       { key: "title", label: "タイトル", x: 5, y: 5, w: 85, h: 30, align: "left", valign: "top", color: "#ffffff", fontSize: 36, weight: 700, lines: 2, required: true },
@@ -52,7 +52,7 @@ const TEMPLATES: Template[] = [
   {
     id: "photo-full-bleed",
     name: "タイトル、フッダー",
-    background: { type: "image", value: "/signage_sample2_resized.png" },
+    background: { type: "image", value: "/fricton-verB.png" },
     imageBox: { x: 0, y: 0, w: 100, h: 100, mode: "cover" },
     textBoxes: [
       { key: "title", label: "タイトル", x: 5, y: 20, w: 85, h: 30, align: "left", valign: "top", color: "#ffffff", fontSize: 36, weight: 700, lines: 2, required: true },
@@ -62,7 +62,7 @@ const TEMPLATES: Template[] = [
   {
     id: "two-columns",
     name: "タイトル（左上）、サブタイトル（左上）、フッター（右下）",
-    background: { type: "image", value: "/signage_sample3_resized.png" },
+    background: { type: "image", value: "/fricton-verC.png" },
     imageBox: { x: 0, y: 0, w: 100, h: 100, mode: "cover" },
     textBoxes: [
       { key: "title", label: "タイトル", x: 5, y: 12, w: 55, h: 40, align: "center", valign: "top", color: "#ffffff", fontSize: 36, weight: 700, lines: 2, required: true },
