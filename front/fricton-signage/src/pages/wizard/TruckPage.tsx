@@ -184,6 +184,16 @@ export default function TruckPage() {
     return () => ctrl.abort();
   }, [anchorDate, mondayStart]);
 
+  // ====== スマホ対応：ブレークポイント（<=768px をモバイル） ======
+  const [isMobile, setIsMobile] = useState<boolean>(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches);
+  useEffect(() => {
+    const mql = window.matchMedia('(max-width: 768px)');
+    const handler = () => setIsMobile(mql.matches);
+    handler();
+    mql.addEventListener('change', handler);
+    return () => mql.removeEventListener('change', handler);
+  }, []);
+
   // テンプレ選択＆テキスト
   const [tplId, setTplId] = useState<string>(TEMPLATES[0].id);
   const currentTpl = useMemo(() => TEMPLATES.find(t => t.id === tplId)!, [tplId]);
@@ -378,18 +388,10 @@ export default function TruckPage() {
     return () => { mounted = false; URL.revokeObjectURL(url); };
   }, [audioFile]);
 
-  // ====== スマホ対応：ブレークポイント（<=768px をモバイル） ======
-  const [isMobile, setIsMobile] = useState<boolean>(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches);
-  useEffect(() => {
-    const mql = window.matchMedia('(max-width: 768px)');
-    const handler = () => setIsMobile(mql.matches);
-    handler();
-    mql.addEventListener('change', handler);
-    return () => mql.removeEventListener('change', handler);
-  }, []);
-
-  // テキスト枠の CSS（直接編集できるよう pointerEvents を有効化）
+  // ====== contentEditable: 非制御化のための参照＆スタイル ======
+  const editableRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
+  // テキスト枠の CSS（直接編集できるよう pointerEvents を有効化）
   const textBoxStyle = (tb: TextBox, focused: boolean): React.CSSProperties => {
     const justifyContent = tb.valign === "middle" ? "center" : tb.valign === "bottom" ? "flex-end" : "flex-start";
     const alignItems = tb.align === "center" ? "center" : tb.align === "right" ? "flex-end" : "flex-start";
@@ -403,6 +405,18 @@ export default function TruckPage() {
       borderRadius: 8,
     };
   };
+
+  // テンプレ切替時のみ 現在の state をDOMに初期同期（普段はDOMに任せる）
+  useEffect(() => {
+    currentTpl.textBoxes.forEach(tb => {
+      const el = editableRefs.current[tb.key];
+      if (!el) return;
+      const v = (textValues[tb.key] ?? "").replace(/\r/g, "");
+      if (v) el.innerText = v;
+      else el.innerHTML = ""; // 空＝placeholder表示
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTpl.id]);
 
   // プレビュー表示中の画像URL
   const [activeImgIndex, setActiveImgIndex] = useState(0);
@@ -485,12 +499,16 @@ export default function TruckPage() {
       return;
     }
 
-    // 未入力の必須枠はデフォルト文言で補完
-    const effectiveText: Record<string, string> = { ...textValues };
+    // 未入力の必須枠はデフォルト文言で補完（※最終整形はここで実施）
+    const effectiveText: Record<string, string> = {};
     currentTpl.textBoxes.forEach(tb => {
-      const v = effectiveText[tb.key]?.trim();
-      if (tb.required && !v) {
+      const dom = editableRefs.current[tb.key];
+      const raw = (dom?.innerText || textValues[tb.key] || "").replace(/\r/g, "");
+      const limited = limitLines(raw, tb.lines ?? 2).trim();
+      if (tb.required && !limited) {
         effectiveText[tb.key] = PLACEHOLDER;
+      } else {
+        effectiveText[tb.key] = limited;
       }
     });
 
@@ -548,6 +566,16 @@ export default function TruckPage() {
 
   return (
     <div style={{ maxWidth: isMobile ? 600 : 1000, margin: "24px auto", padding: isMobile ? 12 : 16 }}>
+      {/* プレースホルダー表示用のスタイル（contentEditable の空時に表示） */}
+      <style>{`
+        .ce[contenteditable][data-placeholder]:empty::before{
+          content: attr(data-placeholder);
+          color: #cbd5e1;
+          pointer-events: none;
+          white-space: pre-wrap;
+        }
+      `}</style>
+
       <h2>アドトラック</h2>
 
       {/* 0) テンプレ選択 */}
@@ -734,20 +762,30 @@ export default function TruckPage() {
         )}
       </div>
 
-      {/* 2) テキスト入力（削除済み：プレビュー上で直接編集） */}
+      {/* 2) テキスト入力（削除：プレビュー上で直接編集） */}
 
-      {/* 3) ライブプレビュー（890×330 の比率で拡縮） */}
+      {/* 3) ライブプレビュー（ズームなし・常に全体表示） */}
       <h3 style={{ marginTop: 24 }}>プレビュー</h3>
+
       <div
         style={{
-          width: "100%", maxWidth: 890, aspectRatio: "890 / 330",
-          position: "relative", border: "1px solid #ddd", borderRadius: 12, overflow: "hidden",
-          background: currentTpl.background.type === "image" ? undefined : "#000",
+          width: "100%",
+          maxWidth: isMobile ? "100%" : 1000, // デスクトップは少し大きめに見せる
+          aspectRatio: "890 / 330",
+          position: "relative",
+          border: "1px solid #ddd",
+          borderRadius: 12,
+          overflow: "hidden",
+          background: "#000",
         }}
       >
         {/* 背景画像 */}
         {currentTpl.background.type === "image" && (
-          <img src={currentTpl.background.value} alt="背景" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+          <img
+            src={currentTpl.background.value}
+            alt="背景"
+            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
+          />
         )}
 
         {/* 画像枠：アップロード画像を1枚だけ表示（手動切替対応） */}
@@ -772,12 +810,9 @@ export default function TruckPage() {
           </div>
         )}
 
-        {/* テキスト枠（プレビュー上で直接編集） */}
+        {/* テキスト枠（プレビュー上で直接編集：非制御） */}
         {currentTpl.textBoxes.map(tb => {
-          const raw = (textValues[tb.key] ?? "").replace(/\r/g, "");
           const maxLines = tb.lines ?? 2;
-          const display = raw.trim() ? raw : PLACEHOLDER;
-
           return (
             <div
               key={tb.key}
@@ -785,41 +820,45 @@ export default function TruckPage() {
               onClick={() => setFocusedKey(tb.key)}
             >
               <div
+                ref={(el) => { editableRefs.current[tb.key] = el; }}
+                className="ce"
                 contentEditable
                 suppressContentEditableWarning
                 role="textbox"
                 aria-label={`${tb.label} を入力`}
-                onFocus={(e) => {
-                  setFocusedKey(tb.key);
-                  if (!(textValues[tb.key]?.trim())) {
-                    (e.currentTarget as HTMLDivElement).innerText = ""; // プレースホルダーは消して入力開始
-                  }
-                }}
+                data-placeholder={PLACEHOLDER}
+                onFocus={() => setFocusedKey(tb.key)}
                 onBlur={(e) => {
                   setFocusedKey(k => (k === tb.key ? null : k));
-                  const text = (e.currentTarget as HTMLDivElement).innerText ?? "";
-                  const limited = limitLines(text, maxLines);
-                  setTextValues(prev => ({ ...prev, [tb.key]: limited.trim() }));
-                  // 空なら表示はプレースホルダーに戻る（stateは空のまま）
-                  if (!limited.trim()) (e.currentTarget as HTMLDivElement).innerText = PLACEHOLDER;
+                  const el = e.currentTarget as HTMLDivElement;
+                  const text = (el.innerText || "").replace(/\r/g, "");
+                  const limited = limitLines(text, maxLines).trim();
+
+                  // DOMとstateを同期（※ここでだけDOMを書き換える）
+                  if (limited) {
+                    if (el.innerText !== limited) el.innerText = limited;
+                    setTextValues(prev => ({ ...prev, [tb.key]: limited }));
+                  } else {
+                    // 空ならDOMも完全に空にしてplaceholderを表示
+                    el.innerHTML = "";
+                    setTextValues(prev => ({ ...prev, [tb.key]: "" }));
+                  }
                 }}
                 onInput={(e) => {
-                  const text = (e.currentTarget as HTMLDivElement).innerText ?? "";
-                  const limited = limitLines(text, maxLines);
-                  if (limited !== text) {
-                    (e.currentTarget as HTMLDivElement).innerText = limited;
-                    const sel = window.getSelection();
-                    if (sel) { sel.selectAllChildren(e.currentTarget); sel.collapseToEnd(); }
-                  }
-                  setTextValues(prev => ({ ...prev, [tb.key]: limited }));
+                  // 入力中はDOMをいじらない（caretジャンプ防止）
+                  const el = e.currentTarget as HTMLDivElement;
+                  const text = (el.innerText || "").replace(/\r/g, "");
+                  setTextValues(prev => ({ ...prev, [tb.key]: text }));
                 }}
-                onPaste={(e) => { // リッチテキスト混入を防止
+                onPaste={(e) => {
+                  // プレーンテキストのみ貼付（HTML混入防止）
                   e.preventDefault();
-                  const text = (e.clipboardData || (window as any).clipboardData).getData("text") || "";
-                  document.execCommand("insertText", false, text);
+                  const t = (e.clipboardData || (window as any).clipboardData).getData("text") || "";
+                  document.execCommand("insertText", false, t);
                 }}
                 style={{
-                  width: "100%", height: "100%",
+                  width: "100%",
+                  height: "100%",
                   overflow: "hidden",
                   whiteSpace: "pre-wrap",
                   fontSize: (tb.fontSize ?? (isMobile ? 14 : 16)),
@@ -827,16 +866,14 @@ export default function TruckPage() {
                   outline: "none",
                   cursor: "text",
                 }}
-              >
-                {display}
-              </div>
+              />
             </div>
           );
         })}
 
-        {/* それ以外のファイル */}
+        {/* それ以外のファイル（必要ならここは外へ移動可） */}
         {otherFiles.length > 0 && (
-          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
+          <div style={{ position: "absolute", bottom: 6, left: 6, fontSize: 12, opacity: 0.85, background: "rgba(255,255,255,.7)", borderRadius: 4, padding: "2px 6px" }}>
             画像/動画以外の選択：{otherFiles.join(", ")}
           </div>
         )}
@@ -907,8 +944,8 @@ export default function TruckPage() {
                   position: "sticky",
                   left: 0,
                   zIndex: 1,
-                  borderRight: "1px solid #eee",
-                  borderBottom: "1px solid #eee",
+                  borderRight: "1px solid " + "#eee",
+                  borderBottom: "1px solid " + "#eee",
                   padding: "6px 4px",
                   fontVariantNumeric: "tabular-nums",
                   background: "#fafafa",
