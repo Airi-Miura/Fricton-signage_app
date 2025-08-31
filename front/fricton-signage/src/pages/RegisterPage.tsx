@@ -5,6 +5,7 @@ export default function RegisterPage() {
   const nav = useNavigate();
   const [username, setUsername] = useState("");
   const [name, setName] = useState("");
+  const [email, setEmail] = useState("");            // ★ 追加
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -15,6 +16,11 @@ export default function RegisterPage() {
 
     if (username.length < 3) return setErr("IDは3文字以上で入力してください");
     if (!name.trim()) return setErr("氏名を入力してください");
+
+    // ★ メール必須 & 形式チェックを追加
+    if (!email.trim()) return setErr("メールアドレスを入力してください");
+    if (!/^\S+@\S+\.\S+$/.test(email)) return setErr("メールアドレスの形式が正しくありません");
+
     if (password.length < 6) return setErr("パスワードは6文字以上で入力してください");
 
     setLoading(true);
@@ -23,12 +29,21 @@ export default function RegisterPage() {
       const res = await fetch("http://localhost:8000/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password, name }),
+        // ★ email を追加送信（サーバ側で必須化しておく）
+        body: JSON.stringify({ username, password, name, email }),
       })
 
       if (!res.ok) {
-        if (res.status === 409) throw new Error("このIDは既に使用されています");
+        // エラー詳細を取得して重複系の文言を出し分け
         const data = await res.json().catch(() => ({}));
+        if (res.status === 409) {
+          const detail = (data?.detail ?? "").toString().toLowerCase();
+          if (detail.includes("email")) throw new Error("このメールアドレスは既に使用されています");
+          if (detail.includes("user") || detail.includes("username") || detail.includes("id")) {
+            throw new Error("このIDは既に使用されています");
+          }
+          throw new Error("既に登録済みの可能性があります");
+        }
         throw new Error(data.detail || "登録に失敗しました");
       }
 
@@ -58,6 +73,21 @@ export default function RegisterPage() {
           <div style={{ fontSize: 12, marginBottom: 4 }}>氏名</div>
           <input value={name} onChange={e=>setName(e.currentTarget.value)} disabled={loading}
             style={{ width:"100%", padding:10, borderRadius:8, border:"1px solid #ddd" }} />
+        </label>
+
+        {/* ★ メールアドレス入力（必須）を追加 */}
+        <label style={{ display: "block", marginBottom: 10 }}>
+          <div style={{ fontSize: 12, marginBottom: 4 }}>メールアドレス</div>
+          <input
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            placeholder="you@example.com"
+            value={email}
+            onChange={e=>setEmail(e.currentTarget.value)}
+            disabled={loading}
+            style={{ width:"100%", padding:10, borderRadius:8, border:"1px solid #ddd" }}
+          />
         </label>
 
         <label style={{ display: "block", marginBottom: 16 }}>

@@ -550,10 +550,15 @@ export default function TruckPage() {
       imageFiles.forEach(f => fd.append("files_trucks", f));
       if (audioFile) fd.append("audio", audioFile); // 任意
 
+      const token = localStorage.getItem("token") || "";
+      const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {}; // ← unionやめる
+          
       const res = await fetch(`${API_ROOT}/api/trucks`, {
         method: "POST",
-        body: fd
+        body: fd,
+        headers, // 空でもOK。Content-Typeは付けない！
       });
+
 
       const txt = await res.text();
       console.log("POST /api/trucks ->", res.status, txt);
@@ -566,7 +571,7 @@ export default function TruckPage() {
         throw new Error(detail || txt || `HTTP ${res.status}`);
       }
 
-      alert("送信しました！");
+      alert("申請完了しました。\nご登録のメールアドレスへ確認メールを送信しました。");
       // 同週で再フェッチ（即グレー反映）＆選択クリア
       setAnchorDate(d => new Date(d));
       setPickedSlots(new Set());

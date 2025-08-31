@@ -9,7 +9,7 @@ from typing import List, Optional, Dict, Tuple
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr  # ★ EmailStr を追加
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from passlib.context import CryptContext
@@ -40,11 +40,41 @@ JWT_SECRET = os.getenv("JWT_SECRET", "dev-change-me")  # 本番は強い値に
 JWT_ALG = os.getenv("JWT_ALG", "HS256")
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))  # 24h
 
+# ★ 送信メール設定（未設定なら送信スキップ）
+SMTP_HOST = os.getenv("SMTP_HOST")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER")
+SMTP_PASS = os.getenv("SMTP_PASS")
+SMTP_FROM_ADDR = os.getenv("SMTP_FROM_ADDR", SMTP_USER or "")
+SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Fricsignage")
+
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 engine_admin = create_engine(ADMIN_AUTH_DATABASE_URL, pool_pre_ping=True)
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 app = FastAPI(title="fricsignage API")
+
+# ---- 簡易メールヘルパ ----
+def send_mail(to_addr: str, subject: str, body: str) -> None:
+    """
+    SMTP_* 環境変数が揃っていない場合は送信せずに戻る（安全にスキップ）
+    """
+    if not (SMTP_HOST and SMTP_USER and SMTP_PASS and SMTP_FROM_ADDR and to_addr):
+        # 必要情報が無い場合は黙ってスキップ（ログ等入れたければここで）
+        return
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.utils import formataddr
+
+    msg = MIMEText(body, _charset="utf-8")
+    msg["Subject"] = subject
+    msg["From"] = formataddr((SMTP_FROM_NAME, SMTP_FROM_ADDR))
+    msg["To"] = to_addr
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
+        s.starttls()
+        s.login(SMTP_USER, SMTP_PASS)
+        s.sendmail(SMTP_FROM_ADDR, [to_addr], msg.as_string())
 
 # ---- 起動時初期化（DB接続の待機＋スキーマ作成）----
 def init_app_db_with_retry():
@@ -104,12 +134,26 @@ def init_app_db_with_retry():
           ) THEN
             ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT TRUE;
           END IF;
+
+          -- ★ email カラム（NULL許可で追加。既存ユーザに配慮）
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='users' AND column_name='email'
+          ) THEN
+            ALTER TABLE users ADD COLUMN email TEXT;
+          END IF;
         END $$;
         """))
 
         conn.execute(text("""
         CREATE INDEX IF NOT EXISTS idx_users_username_lower
         ON users ((lower(username)));
+        """))
+
+        # ★ email 小文字ユニーク（NULL は複数可）
+        conn.execute(text("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower_unique
+        ON users ((lower(email)));
         """))
 
         # submissions
@@ -252,6 +296,7 @@ class RegisterIn(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
     password: str = Field(..., min_length=6, max_length=128)
     name: str = Field(..., min_length=1, max_length=64)
+    email: EmailStr = Field(...)  # ★ 追加（必須）
 
 class LoginIn(BaseModel):
     username: str
@@ -291,14 +336,20 @@ def register_user(p: RegisterIn):
         with engine.begin() as conn:
             row = conn.execute(
                 text("""
-                INSERT INTO users (username, password_hash, display_name)
-                VALUES (:u, :h, :n)
+                INSERT INTO users (username, password_hash, display_name, email)
+                VALUES (:u, :h, :n, :e)
                 RETURNING id
                 """),
-                {"u": uname, "h": pw_hash, "n": p.name.strip()}
+                {"u": uname, "h": pw_hash, "n": p.name.strip(), "e": p.email.strip()}
             ).first()
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="username already exists")
+    except IntegrityError as e:
+        # username / email 重複の出し分け（ざっくり）
+        msg = str(e).lower()
+        if "username" in msg:
+            raise HTTPException(status_code=409, detail="username already exists")
+        if "email" in msg:
+            raise HTTPException(status_code=409, detail="email already exists")
+        raise HTTPException(status_code=409, detail="already exists")
     return {"ok": True, "user_id": int(row[0])}
 
 def create_access_token(*, sub: str, username: str, role: str) -> str:
@@ -332,6 +383,27 @@ def require_admin(authorization: str = Header(None)):
         if not row or not row[0]:
             raise HTTPException(status_code=403, detail="inactive user")
     return claims
+
+# ★ 一般ユーザー（任意）: Authorization があればユーザーを引く（無ければ None）
+def try_get_user_from_auth(authorization: Optional[str]) -> Optional[Dict]:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization.split(" ", 1)[1]
+    try:
+        claims = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except JWTError:
+        return None
+    uid = claims.get("sub")
+    if not uid:
+        return None
+    with engine.begin() as conn:
+        row = conn.execute(text("""
+            SELECT id, username, display_name, email, is_active
+              FROM users WHERE id=:id
+        """), {"id": int(uid)}).mappings().first()
+    if not row or not row["is_active"]:
+        return None
+    return {"id": int(row["id"]), "username": row["username"], "name": row.get("display_name") or "", "email": row.get("email")}
 
 @app.post("/api/auth/login")
 def login_user(p: LoginIn):
@@ -456,6 +528,8 @@ async def create_trucks(
     title: str = Form(""),
     schedule: str = Form(...),
     files_trucks: List[UploadFile] = File(...),
+    audio: UploadFile | None = File(None),  # ★ 任意で受ける（フロント送信に合わせる）
+    authorization: Optional[str] = Header(None),  # ★ 任意でユーザー特定
 ):
     try:
         sched = json.loads(schedule)
@@ -486,6 +560,42 @@ async def create_trucks(
 
         _insert_slots(conn, kind, sub_id, sched)
         saved_paths = await _save_files_for_submission(conn, sub_id, files_trucks)
+
+    # ★ ここで確認メール（可能なら）
+    user = try_get_user_from_auth(authorization)
+    if user and user.get("email"):
+        # 件名・本文は最小実装（必要なら整形強化）
+        images_cnt = len(files_trucks or [])
+        audio_txt = "あり" if audio else "なし"
+        # スケジュール要約
+        try:
+            # {"YYYY-MM-DD":["HH:MM",...]} を "8/31 19:00, 19:30 ..." 風に要約
+            def _fmt_day(d: str) -> str:
+                dt = datetime.strptime(d, "%Y-%m-%d").date()
+                return f"{dt.month}/{dt.day}"
+            parts = []
+            for d, arr in sched.items():
+                if isinstance(arr, list) and arr:
+                    parts.append(f"{_fmt_day(d)} " + ", ".join(arr))
+            sched_summary = "\n".join(parts) if parts else "-"
+        except Exception:
+            sched_summary = "-"
+
+        subject = "【申請完了】アドトラックの申請を受け付けました"
+        body = (
+            f"{user.get('name') or user['username']} 様\n\n"
+            "アドトラックの申請を受け付けました。\n\n"
+            "— 申請概要 —\n"
+            f"・画像：{images_cnt} 枚\n"
+            f"・音声：{audio_txt}\n"
+            f"・日程：\n{sched_summary}\n\n"
+            "本メールは送信専用です。お心当たりがない場合は破棄してください。"
+        )
+        try:
+            send_mail(user["email"], subject, body)
+        except Exception:
+            # メール失敗は API 成功に影響させない（ログに留める運用推奨）
+            pass
 
     return {"ok": True, "submission_id": sub_id, "files": saved_paths}
 
