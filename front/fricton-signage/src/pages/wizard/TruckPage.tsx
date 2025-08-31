@@ -1,6 +1,7 @@
 // src/pages/wizard/TruckPage.tsx
-import { useEffect, useMemo, useRef, useState, Fragment } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import ConfirmDialog from "./ConfirmDialog";
 
 const API_ROOT = "http://localhost:8000";
 const BOOKED_API = `${API_ROOT}/api/truck/booked`;
@@ -141,6 +142,7 @@ export default function TruckPage() {
 
   const fmtWeekday = useMemo(() => new Intl.DateTimeFormat("ja-JP", { weekday: "short" }), []);
   const fmtMonthDay = useMemo(() => new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric" }), []);
+  const fmtHm = useMemo(() => new Intl.DateTimeFormat("ja-JP", { hour: "2-digit", minute: "2-digit" }), []);
   const slots = useMemo(() => createTimeSlots(30, 8, 22), []);
   const dayISO = weekDays.map(d => toISODate(d));
 
@@ -239,7 +241,7 @@ export default function TruckPage() {
   const removeAtIndex = (idx: number) => {
     setImageFiles(prev => {
       const next = prev.filter((_, i) => i !== idx);
-      // アクティブインデックス補正
+      // アクティブインデックス補正（activeImgIndex は下で定義）
       setActiveImgIndex(i => Math.min(Math.max(0, i - (idx <= i ? 1 : 0)), Math.max(0, next.length - 1)));
       return next;
     });
@@ -473,54 +475,66 @@ export default function TruckPage() {
 
   const handleTouchEndGrid = () => { if (isDragging) finalizeSelection(); };
 
-  // --- 送信 ---
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
+  // ===== 送信前ダイアログ制御 =====
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
-    // スケジュール選択チェック
-    if (pickedSlots.size === 0) {
-      setError("配信時間帯を1つ以上選択してください");
-      return;
-    }
-    // 画像チェック（タイプ＆1枚以上）
-    if (!imageFiles || imageFiles.length === 0) {
-      setError("画像ファイルを1枚以上アップロードしてください");
-      return;
-    }
+  // バリデーション（送信前の事前チェック）
+  function validateForSubmit(): string | null {
+    if (pickedSlots.size === 0) return "配信時間帯を1つ以上選択してください";
+    if (!imageFiles || imageFiles.length === 0) return "画像ファイルを1枚以上アップロードしてください";
     const badType = imageFiles.find(f => !ALLOWED_IMAGE_TYPES.includes(f.type) && !/\.(jpe?g|png|webp)$/i.test(f.name));
-    if (badType) {
-      setError("画像は jpg/jpeg/png/webp のみアップロード可能です");
-      return;
-    }
-    // 上限チェック（1分=1枚）
-    if (maxImages > 0 && imgPreviews.length > maxImages) {
-      setError(`選択した画像が上限（最大 ${maxImages} 枚）を超えています。予約時間を延長するか、画像枚数を減らしてください。`);
-      return;
-    }
-
-    // 未入力の必須枠はデフォルト文言で補完（※最終整形はここで実施）
-    const effectiveText: Record<string, string> = {};
-    currentTpl.textBoxes.forEach(tb => {
-      const dom = editableRefs.current[tb.key];
-      const raw = (dom?.innerText || textValues[tb.key] || "").replace(/\r/g, "");
-      const limited = limitLines(raw, tb.lines ?? 2).trim();
-      if (tb.required && !limited) {
-        effectiveText[tb.key] = PLACEHOLDER;
-      } else {
-        effectiveText[tb.key] = limited;
-      }
-    });
-
-    // 予約重複チェック
+    if (badType) return "画像は jpg/jpeg/png/webp のみアップロード可能です";
+    if (maxImages > 0 && imgPreviews.length > maxImages) return `選択した画像が上限（最大 ${maxImages} 枚）を超えています。予約時間を延長するか、画像枚数を減らしてください。`;
     const conflicts = Array.from(pickedSlots).filter(k => booked.has(k));
-    if (conflicts.length > 0) {
-      setError("既に予約済みの時間帯が含まれています。別の時間を選んでください。");
-      return;
-    }
+    if (conflicts.length > 0) return "既に予約済みの時間帯が含まれています。別の時間を選んでください。";
+    return null;
+  }
 
+  // 「確認へ」クリック
+  function onClickConfirm() {
+    setError("");
+    const err = validateForSubmit();
+    if (err) { setError(err); return; }
+    setConfirmOpen(true);
+  }
+
+  // 確認ダイアログ用：日程テキスト
+  const datetimeTextForDialog = useMemo(() => {
+    if (pickedSlots.size === 0) return "（未選択）";
+    const map: Record<string, string[]> = {};
+    Array.from(pickedSlots).forEach(k => {
+      const [d, t] = k.split("_");
+      (map[d] ??= []).push(t);
+    });
+    const dates = Object.keys(map).sort();
+    if (dates.length === 1) {
+      const d = dates[0];
+      const times = map[d].sort();
+      const first = times[0];
+      const last = times[times.length - 1];
+      const [lh, lm] = last.split(":").map(Number);
+      const end = new Date(d + "T00:00:00");
+      end.setHours(lh, lm + 30, 0, 0);
+      return `${fmtMonthDay.format(new Date(d))} ${first} ~ ${fmtHm.format(end)}`;
+    }
+    return `${dates.length}日（${pickedSlots.size}枠）`;
+  }, [pickedSlots, fmtMonthDay, fmtHm]);
+
+  // --- 実送信 ---
+  async function doSend() {
+    setError("");
     setLoading(true);
     try {
+      // 未入力の必須枠はデフォルト文言で補完
+      const effectiveText: Record<string, string> = {};
+      currentTpl.textBoxes.forEach(tb => {
+        const dom = editableRefs.current[tb.key];
+        const raw = (dom?.innerText || textValues[tb.key] || "").replace(/\r/g, "");
+        const limited = limitLines(raw, tb.lines ?? 2).trim();
+        effectiveText[tb.key] = tb.required && !limited ? PLACEHOLDER : limited;
+      });
+
+      // スケジュールを日付ごとにまとめる
       const byDate: Record<string, string[]> = {};
       Array.from(pickedSlots).forEach(k => {
         const [d, t] = k.split("_");
@@ -561,6 +575,7 @@ export default function TruckPage() {
       setError(err?.message || "送信に失敗しました。もう一度お試しください。");
     } finally {
       setLoading(false);
+      setConfirmOpen(false);
     }
   }
 
@@ -935,7 +950,7 @@ export default function TruckPage() {
 
           {/* 時間行 */}
           {slots.map((t, sIdx) => (
-            <Fragment key={`mrow-${t}`}>
+            <div key={`mrow-${t}`} style={{ display: "contents" }}>
               {/* 左の時間ラベル */}
               <div
                 style={{
@@ -980,7 +995,7 @@ export default function TruckPage() {
                   />
                 );
               })}
-            </Fragment>
+            </div>
           ))}
         </div>
       ) : (
@@ -1024,8 +1039,8 @@ export default function TruckPage() {
               {/* 時間ラベル */}
               <div
                 style={{
-                  borderRight: "1px solid #eee",
-                  borderBottom: "1px solid #eee",
+                  borderRight: "1px solid " + "#eee",
+                  borderBottom: "1px solid " + "#eee",
                   padding: "6px 8px",
                   fontVariantNumeric: "tabular-nums",
                   background: "#fafafa",
@@ -1073,11 +1088,24 @@ export default function TruckPage() {
       {/* 送信ボタン */}
       <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center", flexWrap: "wrap" }}>
         <button onClick={() => nav(-1)} disabled={loading}>戻る</button>
-        <button onClick={onSubmit} disabled={loading}>
+        <button onClick={onClickConfirm} disabled={loading}>
           {loading ? "送信中…" : "確認へ"}
         </button>
         {loading && <span style={{ fontSize: 12, opacity: 0.8 }}>送信中です…</span>}
       </div>
+
+      {/* 送信前の確認ダイアログ */}
+      <ConfirmDialog
+        open={confirmOpen}
+        summary={{
+          imagesCount: imageFiles.length,
+          audioCount: audioFile ? 1 : 0,
+          datetimeText: datetimeTextForDialog,
+        }}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={doSend}
+        confirming={loading}
+      />
     </div>
   );
 }
