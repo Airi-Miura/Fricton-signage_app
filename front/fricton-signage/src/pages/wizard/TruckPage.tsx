@@ -17,6 +17,16 @@ const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const THUMB_W = Math.round(REQUIRED_W_Truck / 4); // 223
 const THUMB_H = Math.round(REQUIRED_H_Truck / 4); // 83
 
+// 入力が空の時に表示＆送信時に補完する既定文言
+const PLACEHOLDER = "ここに文字を入力してください";
+
+// 最大行数に収める（改行ベース）
+function limitLines(text: string, maxLines = 2) {
+  const lines = text.replace(/\r/g, "").split("\n");
+  if (lines.length <= maxLines) return text;
+  return lines.slice(0, maxLines).join("\n");
+}
+
 type ImgPreview = { name: string; url: string; width: number; height: number; ok: boolean; typeOk: boolean };
 type AudioPreview = { name: string; url: string; duration: number };
 
@@ -210,7 +220,6 @@ export default function TruckPage() {
     setError("");
   };
 
-  
   const appendInputRef = useRef<HTMLInputElement | null>(null);
 
   const removeAtIndex = (idx: number) => {
@@ -364,8 +373,9 @@ export default function TruckPage() {
     return () => { mounted = false; URL.revokeObjectURL(url); };
   }, [audioFile]);
 
-  // テキスト枠の CSS
-  const textBoxStyle = (tb: TextBox): React.CSSProperties => {
+  // テキスト枠の CSS（直接編集できるよう pointerEvents を有効化）
+  const [focusedKey, setFocusedKey] = useState<string | null>(null);
+  const textBoxStyle = (tb: TextBox, focused: boolean): React.CSSProperties => {
     const justifyContent = tb.valign === "middle" ? "center" : tb.valign === "bottom" ? "flex-end" : "flex-start";
     const alignItems = tb.align === "center" ? "center" : tb.align === "right" ? "flex-end" : "flex-start";
     return {
@@ -373,7 +383,8 @@ export default function TruckPage() {
       left: `${tb.x}%`, top: `${tb.y}%`, width: `${tb.w}%`, height: `${tb.h}%`,
       display: "flex", justifyContent, alignItems, padding: 8,
       color: tb.color ?? "#fff", fontWeight: tb.weight ?? 600, lineHeight: 1.2, textAlign: tb.align ?? "left",
-      overflow: "hidden", wordBreak: "break-word", pointerEvents: "none",
+      overflow: "hidden", wordBreak: "break-word", pointerEvents: "auto",
+      outline: focused ? "2px solid #2563eb" : "none",
     };
   };
 
@@ -415,12 +426,16 @@ export default function TruckPage() {
       setError(`選択した画像が上限（最大 ${maxImages} 枚）を超えています。予約時間を延長するか、画像枚数を減らしてください。`);
       return;
     }
-    // 必須テキストチェック
-    const missing = currentTpl.textBoxes.filter(tb => tb.required && !textValues[tb.key]?.trim());
-    if (missing.length > 0) {
-      setError(`必須テキスト（${missing.map(m => m.label).join("、")}）を入力してください`);
-      return;
-    }
+
+    // 未入力の必須枠はデフォルト文言で補完
+    const effectiveText: Record<string, string> = { ...textValues };
+    currentTpl.textBoxes.forEach(tb => {
+      const v = effectiveText[tb.key]?.trim();
+      if (tb.required && !v) {
+        effectiveText[tb.key] = PLACEHOLDER;
+      }
+    });
+
     // 予約重複チェック
     const conflicts = Array.from(pickedSlots).filter(k => booked.has(k));
     if (conflicts.length > 0) {
@@ -440,7 +455,7 @@ export default function TruckPage() {
       const fd = new FormData();
       fd.append("kind", KIND);
       fd.append("tpl_id", tplId);
-      fd.append("text_values", JSON.stringify(textValues));
+      fd.append("text_values", JSON.stringify(effectiveText));
       fd.append("schedule", JSON.stringify(byDate));
       imageFiles.forEach(f => fd.append("files_trucks", f));
       if (audioFile) fd.append("audio", audioFile); // 任意
@@ -514,7 +529,7 @@ export default function TruckPage() {
         <label>
           画像ファイル（複数可・推奨サイズ {REQUIRED_W_Truck}×{REQUIRED_H_Truck} ・形式：jpg/jpeg/png/webp）
           <input
-            ref={appendInputRef} 
+            ref={appendInputRef}
             type="file"
             accept="image/jpeg,image/png,image/webp"
             multiple
@@ -661,22 +676,7 @@ export default function TruckPage() {
         )}
       </div>
 
-      {/* 2) テキスト入力（テンプレに応じて生成） */}
-      <h3 style={{ marginTop: 24 }}>テキスト入力</h3>
-      <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
-        {currentTpl.textBoxes.map(tb => (
-          <label key={tb.key} style={{ display: "grid", gap: 6 }}>
-            {tb.label}{tb.required ? <span style={{ color: "#b91c1c" }}>（必須）</span> : null}
-            <textarea
-              value={textValues[tb.key] ?? ""}
-              onChange={e => setTextValues(prev => ({ ...prev, [tb.key]: e.target.value }))}
-              rows={Math.max(2, tb.lines ?? 2)}
-              placeholder={`${tb.label}（最大 ${tb.lines ?? 2} 行程度を推奨）`}
-              style={{ resize: "vertical", padding: 8, borderRadius: 8, border: "1px solid #ddd" }}
-            />
-          </label>
-        ))}
-      </div>
+      {/* 2) テキスト入力（削除済み：プレビュー上で直接編集） */}
 
       {/* 3) ライブプレビュー（890×330 の比率で拡縮） */}
       <h3 style={{ marginTop: 24 }}>プレビュー</h3>
@@ -714,28 +714,67 @@ export default function TruckPage() {
           </div>
         )}
 
-        {/* テキスト枠 */}
+        {/* テキスト枠（プレビュー上で直接編集） */}
         {currentTpl.textBoxes.map(tb => {
-          const rawText = (textValues[tb.key] ?? "");
-          const isEmpty = !rawText.trim() && tb.required;
+          const raw = (textValues[tb.key] ?? "").replace(/\r/g, "");
+          const maxLines = tb.lines ?? 2;
+          const display = raw.trim() ? raw : PLACEHOLDER;
+
           return (
-            <div key={tb.key} style={textBoxStyle(tb)}>
+            <div
+              key={tb.key}
+              style={textBoxStyle(tb, focusedKey === tb.key)}
+              onClick={() => setFocusedKey(tb.key)}
+            >
               <div
+                contentEditable
+                suppressContentEditableWarning
+                role="textbox"
+                aria-label={`${tb.label} を入力`}
+                onFocus={(e) => {
+                  setFocusedKey(tb.key);
+                  if (!(textValues[tb.key]?.trim())) {
+                    (e.currentTarget as HTMLDivElement).innerText = ""; // プレースホルダーは消して入力開始
+                  }
+                }}
+                onBlur={(e) => {
+                  setFocusedKey(k => (k === tb.key ? null : k));
+                  const text = (e.currentTarget as HTMLDivElement).innerText ?? "";
+                  const limited = limitLines(text, maxLines);
+                  setTextValues(prev => ({ ...prev, [tb.key]: limited.trim() }));
+                  // 空なら表示はプレースホルダーに戻る（stateは空のままにする）
+                  if (!limited.trim()) (e.currentTarget as HTMLDivElement).innerText = PLACEHOLDER;
+                }}
+                onInput={(e) => {
+                  const text = (e.currentTarget as HTMLDivElement).innerText ?? "";
+                  const limited = limitLines(text, maxLines);
+                  if (limited !== text) {
+                    (e.currentTarget as HTMLDivElement).innerText = limited;
+                    // 末尾にキャレットを戻す
+                    const sel = window.getSelection();
+                    if (sel) {
+                      sel.selectAllChildren(e.currentTarget);
+                      sel.collapseToEnd();
+                    }
+                  }
+                  setTextValues(prev => ({ ...prev, [tb.key]: limited }));
+                }}
                 style={{
-                  width: "100%", height: "100%", overflow: "hidden",
-                  display: "-webkit-box" as unknown as React.CSSProperties["display"],
-                  WebkitBoxOrient: "vertical" as any,
-                  WebkitLineClamp: (tb.lines ?? 2) as any,
+                  width: "100%", height: "100%",
+                  overflow: "hidden",
                   whiteSpace: "pre-wrap",
-                  fontSize: ((isEmpty ? 25 : tb.fontSize) ?? 16),
-                  color: ((isEmpty ? "#ff6666" : tb.color) ?? "#fff"),
+                  fontSize: (tb.fontSize ?? 16),
+                  color: tb.color ?? "#fff",
+                  outline: "none",
+                  cursor: "text",
                 }}
               >
-                {isEmpty ? "（未入力）" : rawText}
+                {display}
               </div>
             </div>
           );
         })}
+
         {/* それ以外のファイル */}
         {otherFiles.length > 0 && (
           <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
@@ -836,7 +875,7 @@ export default function TruckPage() {
               );
             })}
           </div>
-        ))}1
+        ))}
       </div>
 
       {error && <div style={{ color: "red", marginTop: 8 }}>{error}</div>}
