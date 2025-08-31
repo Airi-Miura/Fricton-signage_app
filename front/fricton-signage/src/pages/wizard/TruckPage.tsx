@@ -1,5 +1,5 @@
 // src/pages/wizard/TruckPage.tsx
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, Fragment } from "react";
 import { useNavigate } from "react-router-dom";
 
 const API_ROOT = "http://localhost:8000";
@@ -19,6 +19,10 @@ const THUMB_H = Math.round(REQUIRED_H_Truck / 4); // 83
 
 // 入力が空の時に表示＆送信時に補完する既定文言
 const PLACEHOLDER = "ここに文字を入力してください";
+
+// スマホ週ビュー用（Googleカレンダー風）
+const MOBILE_TIME_COL_W = 44;   // 左の時間欄の幅(px)
+const MOBILE_CELL_MIN_H = 28;   // 各スロットの最小高さ(px)
 
 // 最大行数に収める（改行ベース）
 function limitLines(text: string, maxLines = 2) {
@@ -231,25 +235,26 @@ export default function TruckPage() {
     });
   };
 
-  // --- ドラッグ選択ハンドラ ---
+  // --- ドラッグ選択ハンドラ（マウス）---
+  const finalizeSelection = () => {
+    setPickedSlots(prev => {
+      const next = new Set(prev);
+      if (dragMode && dragPreview.size > 0) {
+        dragPreview.forEach(k => {
+          if (dragMode === "select") next.add(k);
+          else next.delete(k);
+        });
+      }
+      return next;
+    });
+    setIsDragging(false);
+    setDragMode(null);
+    setDragStart(null);
+    setDragPreview(new Set());
+  };
+
   useEffect(() => {
-    const handleUp = () => {
-      if (!isDragging) return;
-      setPickedSlots(prev => {
-        const next = new Set(prev);
-        if (dragMode && dragPreview.size > 0) {
-          dragPreview.forEach(k => {
-            if (dragMode === "select") next.add(k);
-            else next.delete(k);
-          });
-        }
-        return next;
-      });
-      setIsDragging(false);
-      setDragMode(null);
-      setDragStart(null);
-      setDragPreview(new Set());
-    };
+    const handleUp = () => { if (isDragging) finalizeSelection(); };
     if (isDragging) window.addEventListener("mouseup", handleUp);
     return () => window.removeEventListener("mouseup", handleUp);
   }, [isDragging, dragMode, dragPreview]);
@@ -373,6 +378,16 @@ export default function TruckPage() {
     return () => { mounted = false; URL.revokeObjectURL(url); };
   }, [audioFile]);
 
+  // ====== スマホ対応：ブレークポイント（<=768px をモバイル） ======
+  const [isMobile, setIsMobile] = useState<boolean>(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches);
+  useEffect(() => {
+    const mql = window.matchMedia('(max-width: 768px)');
+    const handler = () => setIsMobile(mql.matches);
+    handler();
+    mql.addEventListener('change', handler);
+    return () => mql.removeEventListener('change', handler);
+  }, []);
+
   // テキスト枠の CSS（直接編集できるよう pointerEvents を有効化）
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const textBoxStyle = (tb: TextBox, focused: boolean): React.CSSProperties => {
@@ -381,10 +396,11 @@ export default function TruckPage() {
     return {
       position: "absolute",
       left: `${tb.x}%`, top: `${tb.y}%`, width: `${tb.w}%`, height: `${tb.h}%`,
-      display: "flex", justifyContent, alignItems, padding: 8,
+      display: "flex", justifyContent, alignItems, padding: isMobile ? 6 : 8,
       color: tb.color ?? "#fff", fontWeight: tb.weight ?? 600, lineHeight: 1.2, textAlign: tb.align ?? "left",
       overflow: "hidden", wordBreak: "break-word", pointerEvents: "auto",
       outline: focused ? "2px solid #2563eb" : "none",
+      borderRadius: 8,
     };
   };
 
@@ -400,6 +416,48 @@ export default function TruckPage() {
     const el = scroller.querySelector<HTMLElement>(`[data-idx="${activeImgIndex}"]`);
     el?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
   }, [activeImgIndex]);
+
+  // --- モバイル週グリッド用タッチ選択 ---
+  const handleTouchStartGrid =
+    (dayIdx: number, slotIdx: number, key: string, disabled: boolean) =>
+    (e: React.TouchEvent) => {
+      if (disabled) return;
+      e.preventDefault();
+      setIsDragging(true);
+      setDragStart({ day: dayIdx, slot: slotIdx });
+      setDragMode(pickedSlots.has(key) ? "deselect" : "select");
+      setDragPreview(new Set([key]));
+    };
+
+  const handleTouchMoveGrid = (e: React.TouchEvent) => {
+    if (!isDragging || !dragStart) return;
+    const touch = e.touches[0];
+    const el = document.elementFromPoint(touch.clientX, touch.clientY) as HTMLElement | null;
+    if (!el) return;
+    const dAttr = el.getAttribute("data-didx");
+    const sAttr = el.getAttribute("data-sidx");
+    if (dAttr == null || sAttr == null) return;
+
+    const dIdx = Number(dAttr);
+    const sIdx = Number(sAttr);
+
+    const minD = Math.min(dragStart.day, dIdx);
+    const maxD = Math.max(dragStart.day, dIdx);
+    const minS = Math.min(dragStart.slot, sIdx);
+    const maxS = Math.max(dragStart.slot, sIdx);
+
+    const set = new Set<string>();
+    for (let d = minD; d <= maxD; d++) {
+      for (let s = minS; s <= maxS; s++) {
+        const k = `${dayISO[d]}_${slots[s]}`;
+        if (!booked.has(k)) set.add(k);
+      }
+    }
+    setDragPreview(set);
+    e.preventDefault();
+  };
+
+  const handleTouchEndGrid = () => { if (isDragging) finalizeSelection(); };
 
   // --- 送信 ---
   async function onSubmit(e: React.FormEvent) {
@@ -489,12 +547,12 @@ export default function TruckPage() {
   }
 
   return (
-    <div style={{ maxWidth: 1000, margin: "24px auto", padding: 16 }}>
+    <div style={{ maxWidth: isMobile ? 600 : 1000, margin: "24px auto", padding: isMobile ? 12 : 16 }}>
       <h2>アドトラック</h2>
 
       {/* 0) テンプレ選択 */}
       <h3 style={{ marginTop: 8 }}>テンプレートを選択</h3>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 10, marginTop: 8 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(240px, 1fr))", gap: 10, marginTop: 8 }}>
         {TEMPLATES.map(t => {
           const previewUrl = t.background.type === "image" ? t.background.value : undefined;
           return (
@@ -541,18 +599,15 @@ export default function TruckPage() {
         {/* プレビュー（1枚以上あるとき） */}
         {imgPreviews.length > 0 && (
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
               <div style={{ fontWeight: 700 }}>画像プレビュー</div>
               <div style={{ fontSize: 12, color: "#6B7280" }}>
                 合計 {imgPreviews.length} 枚{reservedMinutes > 0 ? ` / 上限 ${maxImages} 枚` : ""}
               </div>
               <div style={{ flex: 1 }} />
-              
+
               {/*追加ボタン → 隠し input を click*/}
-              <button
-                type="button"
-                onClick={() => appendInputRef.current?.click()}
-              >
+              <button type="button" onClick={() => appendInputRef.current?.click()}>
                 ファイルを追加
               </button>
 
@@ -580,6 +635,7 @@ export default function TruckPage() {
                 borderRadius: 8,
                 padding: 8,
                 background: "#f8fafc",
+                WebkitOverflowScrolling: 'touch',
               }}
             >
               {imgPreviews.map((p, idx) => (
@@ -588,7 +644,7 @@ export default function TruckPage() {
                   data-idx={idx}
                   style={{
                     position: "relative",
-                    flex: "0 0 220px",
+                    flex: isMobile ? "0 0 180px" : "0 0 220px",
                     border: "1px solid #ddd",
                     borderRadius: 8,
                     padding: 8,
@@ -612,7 +668,9 @@ export default function TruckPage() {
 
                   <div
                     style={{
-                      width: THUMB_W, height: THUMB_H, borderRadius: 6, background: "#f8f8f8",
+                      width: isMobile ? Math.round(THUMB_W * 0.85) : THUMB_W,
+                      height: isMobile ? Math.round(THUMB_H * 0.85) : THUMB_H,
+                      borderRadius: 6, background: "#f8f8f8",
                       display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", margin: "0 auto 6px",
                       outline: idx === activeImgIndex ? "2px solid #2563eb" : "none", cursor: "pointer"
                     }}
@@ -742,7 +800,7 @@ export default function TruckPage() {
                   const text = (e.currentTarget as HTMLDivElement).innerText ?? "";
                   const limited = limitLines(text, maxLines);
                   setTextValues(prev => ({ ...prev, [tb.key]: limited.trim() }));
-                  // 空なら表示はプレースホルダーに戻る（stateは空のままにする）
+                  // 空なら表示はプレースホルダーに戻る（stateは空のまま）
                   if (!limited.trim()) (e.currentTarget as HTMLDivElement).innerText = PLACEHOLDER;
                 }}
                 onInput={(e) => {
@@ -750,20 +808,21 @@ export default function TruckPage() {
                   const limited = limitLines(text, maxLines);
                   if (limited !== text) {
                     (e.currentTarget as HTMLDivElement).innerText = limited;
-                    // 末尾にキャレットを戻す
                     const sel = window.getSelection();
-                    if (sel) {
-                      sel.selectAllChildren(e.currentTarget);
-                      sel.collapseToEnd();
-                    }
+                    if (sel) { sel.selectAllChildren(e.currentTarget); sel.collapseToEnd(); }
                   }
                   setTextValues(prev => ({ ...prev, [tb.key]: limited }));
+                }}
+                onPaste={(e) => { // リッチテキスト混入を防止
+                  e.preventDefault();
+                  const text = (e.clipboardData || (window as any).clipboardData).getData("text") || "";
+                  document.execCommand("insertText", false, text);
                 }}
                 style={{
                   width: "100%", height: "100%",
                   overflow: "hidden",
                   whiteSpace: "pre-wrap",
-                  fontSize: (tb.fontSize ?? 16),
+                  fontSize: (tb.fontSize ?? (isMobile ? 14 : 16)),
                   color: tb.color ?? "#fff",
                   outline: "none",
                   cursor: "text",
@@ -785,7 +844,9 @@ export default function TruckPage() {
 
       {/* 4) 配信スケジュール（週グリッド） */}
       <h3 style={{ marginTop: 24 }}>配信スケジュール</h3>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+
+      {/* 週ナビ（共通） */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
         <button onClick={goPrevWeek} disabled={loading}>◀︎ 前の週</button>
         <button onClick={goThisWeek} disabled={loading}>今週</button>
         <button onClick={goNextWeek} disabled={loading}>次の週 ▶︎</button>
@@ -796,92 +857,186 @@ export default function TruckPage() {
         {bookedError && <div style={{ marginLeft: 12, fontSize: 12, color: "#b91c1c" }}>{bookedError}</div>}
       </div>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "80px repeat(7, 1fr)",
-          borderTop: "1px solid #ddd",
-          borderLeft: "1px solid #ddd",
-          maxHeight: 520,
-          overflow: "auto",
-          borderRadius: 8,
-          userSelect: "none",
-        }}
-      >
-        {/* ヘッダー */}
-        <div style={{ position: "sticky", top: 0, background: "#fff", zIndex: 1, borderRight: "1px solid #ddd", borderBottom: "1px solid #ddd" }} />
-        {weekDays.map((d, i) => (
-          <div
-            key={`hdr-${i}`}
-            style={{
-              position: "sticky",
-              top: 0,
-              background: "#fff",
-              zIndex: 1,
-              borderRight: "1px solid #ddd",
-              borderBottom: "1px solid #ddd",
-              padding: "6px 8px",
-              textAlign: "center",
-              fontWeight: 700,
-            }}
-          >
-            {fmtWeekday.format(d)}（{fmtMonthDay.format(d)}）
-          </div>
-        ))}
-
-        {/* 時間行 */}
-        {slots.map((t, sIdx) => (
-          <div key={`row-${t}`} style={{ display: "contents" }}>
-            {/* 時間ラベル */}
+      {/* ====== モバイル：週グリッド（7日×縦スクロール） ====== */}
+      {isMobile ? (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: `${MOBILE_TIME_COL_W}px repeat(7, 1fr)`,
+            borderTop: "1px solid #ddd",
+            borderLeft: "1px solid #ddd",
+            maxHeight: "70vh",
+            overflow: "auto",
+            borderRadius: 8,
+            userSelect: "none",
+            WebkitOverflowScrolling: 'touch',
+          }}
+          onTouchMove={handleTouchMoveGrid}
+          onTouchEnd={handleTouchEndGrid}
+        >
+          {/* 左上空セル */}
+          <div style={{ position: "sticky", top: 0, background: "#fff", zIndex: 1, borderRight: "1px solid #ddd", borderBottom: "1px solid #ddd" }} />
+          {/* 曜日ヘッダー */}
+          {weekDays.map((d, i) => (
             <div
+              key={`mh-${i}`}
               style={{
-                borderRight: "1px solid #eee",
-                borderBottom: "1px solid #eee",
-                padding: "6px 8px",
-                fontVariantNumeric: "tabular-nums",
-                background: "#fafafa",
                 position: "sticky",
-                left: 0,
+                top: 0,
+                background: "#fff",
                 zIndex: 1,
+                borderRight: "1px solid #ddd",
+                borderBottom: "1px solid #ddd",
+                padding: "4px 4px",
+                textAlign: "center",
+                fontWeight: 700,
+                fontSize: 11,
+                lineHeight: 1.1,
               }}
             >
-              {t}
+              {fmtWeekday.format(d)}（{fmtMonthDay.format(d)}）
             </div>
+          ))}
 
-            {/* 7列のスロット */}
-            {weekDays.map((_, dIdx) => {
-              const key = `${dayISO[dIdx]}_${t}`;
-              const disabled = booked.has(key);
-              const picked = pickedSlots.has(key);
-              const preview = dragPreview.has(key);
-              return (
-                <div
-                  key={key}
-                  onMouseDown={handleMouseDown(dIdx, sIdx, key, disabled)}
-                  onMouseEnter={handleMouseEnter(dIdx, sIdx, (d, s) => `${dayISO[d]}_${slots[s]}`)}
-                  onClick={() => toggleSlot(key, disabled)}
-                  title={disabled ? "予約済み" : key.replace("_", " ")}
-                  style={{
-                    borderRight: "1px solid #eee",
-                    borderBottom: "1px solid #eee",
-                    padding: "8px 4px",
-                    cursor: disabled ? "not-allowed" : "pointer",
-                    background: disabled ? "#eee" : picked ? "#e7f7ec" : preview ? "#e8f1ff" : "white",
-                    outline: picked ? "2px solid #16a34a" : preview ? "2px solid #3b82f6" : "none",
-                    outlineOffset: "-1px",
-                    minHeight: 32,
-                  }}
-                />
-              );
-            })}
-          </div>
-        ))}
-      </div>
+          {/* 時間行 */}
+          {slots.map((t, sIdx) => (
+            <Fragment key={`mrow-${t}`}>
+              {/* 左の時間ラベル */}
+              <div
+                style={{
+                  position: "sticky",
+                  left: 0,
+                  zIndex: 1,
+                  borderRight: "1px solid #eee",
+                  borderBottom: "1px solid #eee",
+                  padding: "6px 4px",
+                  fontVariantNumeric: "tabular-nums",
+                  background: "#fafafa",
+                  fontSize: 11,
+                }}
+              >
+                {t}
+              </div>
+
+              {/* 各日のセル */}
+              {weekDays.map((_, dIdx) => {
+                const key = `${dayISO[dIdx]}_${t}`;
+                const disabled = booked.has(key);
+                const picked = pickedSlots.has(key);
+                const preview = dragPreview.has(key);
+                return (
+                  <div
+                    key={key}
+                    data-didx={dIdx}
+                    data-sidx={sIdx}
+                    onTouchStart={handleTouchStartGrid(dIdx, sIdx, key, disabled)}
+                    onClick={() => toggleSlot(key, disabled)}
+                    title={disabled ? "予約済み" : key.replace("_", " ")}
+                    style={{
+                      borderRight: "1px solid #eee",
+                      borderBottom: "1px solid #eee",
+                      padding: "6px 2px",
+                      cursor: disabled ? "not-allowed" : "pointer",
+                      background: disabled ? "#eee" : picked ? "#e7f7ec" : preview ? "#e8f1ff" : "white",
+                      outline: picked ? "2px solid #16a34a" : preview ? "2px solid #3b82f6" : "none",
+                      outlineOffset: "-1px",
+                      minHeight: MOBILE_CELL_MIN_H,
+                    }}
+                  />
+                );
+              })}
+            </Fragment>
+          ))}
+        </div>
+      ) : (
+        // ====== デスクトップ：従来の週グリッド ======
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "80px repeat(7, 1fr)",
+            borderTop: "1px solid #ddd",
+            borderLeft: "1px solid #ddd",
+            maxHeight: 520,
+            overflow: "auto",
+            borderRadius: 8,
+            userSelect: "none",
+          }}
+        >
+          {/* ヘッダー */}
+          <div style={{ position: "sticky", top: 0, background: "#fff", zIndex: 1, borderRight: "1px solid #ddd", borderBottom: "1px solid #ddd" }} />
+          {weekDays.map((d, i) => (
+            <div
+              key={`hdr-${i}`}
+              style={{
+                position: "sticky",
+                top: 0,
+                background: "#fff",
+                zIndex: 1,
+                borderRight: "1px solid #ddd",
+                borderBottom: "1px solid #ddd",
+                padding: "6px 8px",
+                textAlign: "center",
+                fontWeight: 700,
+              }}
+            >
+              {fmtWeekday.format(d)}（{fmtMonthDay.format(d)}）
+            </div>
+          ))}
+
+          {/* 時間行 */}
+          {slots.map((t, sIdx) => (
+            <div key={`row-${t}`} style={{ display: "contents" }}>
+              {/* 時間ラベル */}
+              <div
+                style={{
+                  borderRight: "1px solid #eee",
+                  borderBottom: "1px solid #eee",
+                  padding: "6px 8px",
+                  fontVariantNumeric: "tabular-nums",
+                  background: "#fafafa",
+                  position: "sticky",
+                  left: 0,
+                  zIndex: 1,
+                }}
+              >
+                {t}
+              </div>
+
+              {/* 7列のスロット */}
+              {weekDays.map((_, dIdx) => {
+                const key = `${dayISO[dIdx]}_${t}`;
+                const disabled = booked.has(key);
+                const picked = pickedSlots.has(key);
+                const preview = dragPreview.has(key);
+                return (
+                  <div
+                    key={key}
+                    onMouseDown={handleMouseDown(dIdx, sIdx, key, disabled)}
+                    onMouseEnter={handleMouseEnter(dIdx, sIdx, (d, s) => `${dayISO[d]}_${slots[s]}`)}
+                    onClick={() => toggleSlot(key, disabled)}
+                    title={disabled ? "予約済み" : key.replace("_", " ")}
+                    style={{
+                      borderRight: "1px solid #eee",
+                      borderBottom: "1px solid #eee",
+                      padding: "8px 4px",
+                      cursor: disabled ? "not-allowed" : "pointer",
+                      background: disabled ? "#eee" : picked ? "#e7f7ec" : preview ? "#e8f1ff" : "white",
+                      outline: picked ? "2px solid #16a34a" : preview ? "2px solid #3b82f6" : "none",
+                      outlineOffset: "-1px",
+                      minHeight: 32,
+                    }}
+                  />
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
 
       {error && <div style={{ color: "red", marginTop: 8 }}>{error}</div>}
 
       {/* 送信ボタン */}
-      <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center", flexWrap: "wrap" }}>
         <button onClick={() => nav(-1)} disabled={loading}>戻る</button>
         <button onClick={onSubmit} disabled={loading}>
           {loading ? "送信中…" : "確認へ"}
