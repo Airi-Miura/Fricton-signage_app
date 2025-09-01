@@ -581,7 +581,12 @@ export default function TruckPage() {
       if (audioFile) fd.append("audio", audioFile);
 
       // ★ 追加: 文字色も送る
-      fd.append("text_colors", JSON.stringify(effectiveColors));
+      fd.append("text_colors", JSON.stringify(textColors || {}));
+
+      fd.append("overlay", JSON.stringify({
+        tplId,
+        textColors: textColors || {}
+      }));
 
       const token = localStorage.getItem("token") ?? "";
 
