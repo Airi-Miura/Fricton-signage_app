@@ -45,8 +45,17 @@ SMTP_HOST = os.getenv("SMTP_HOST")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASS = os.getenv("SMTP_PASS")
-SMTP_FROM_ADDR = os.getenv("SMTP_FROM_ADDR", SMTP_USER or "")
-SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Fricsignage")
+SMTP_FROM_ADDR = (
+    os.getenv("SMTP_FROM_ADDR")
+    or os.getenv("MAIL_FROM")
+    or os.getenv("SMTP_FROM")      # ← どちらか入っていれば拾う
+    or (SMTP_USER or "")
+)
+SMTP_FROM_NAME = (
+    os.getenv("SMTP_FROM_NAME")
+    or os.getenv("MAIL_FROM_NAME") # ← 追加
+    or "Fricsignage"
+)
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 engine_admin = create_engine(ADMIN_AUTH_DATABASE_URL, pool_pre_ping=True)
@@ -59,6 +68,7 @@ def send_mail(to_addr: str, subject: str, body: str) -> None:
     """
     SMTP_* 環境変数が揃っていない場合は送信せずに戻る（安全にスキップ）
     """
+
     if not (SMTP_HOST and SMTP_USER and SMTP_PASS and SMTP_FROM_ADDR and to_addr):
         # 必要情報が無い場合は黙ってスキップ（ログ等入れたければここで）
         return
@@ -71,6 +81,12 @@ def send_mail(to_addr: str, subject: str, body: str) -> None:
     msg["From"] = formataddr((SMTP_FROM_NAME, SMTP_FROM_ADDR))
     msg["To"] = to_addr
 
+    print(msg["From"])
+    print(msg["To"])
+    print(msg["Subject"])
+    print(SMTP_FROM_ADDR)
+
+    # 587(STARTTLS) を既定。465 を使う場合は SMTP_SSL に置き換え
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
         s.starttls()
         s.login(SMTP_USER, SMTP_PASS)
@@ -350,6 +366,22 @@ def register_user(p: RegisterIn):
         if "email" in msg:
             raise HTTPException(status_code=409, detail="email already exists")
         raise HTTPException(status_code=409, detail="already exists")
+
+    # ★ 登録完了メールを送信（失敗してもAPI成功は維持）
+    try:
+        subject = "【Fricsignage】ご登録ありがとうございます"
+        body = (
+            f"{p.name} 様\n\n"
+            "この度はご登録ありがとうございます。アカウントが作成されました。\n\n"
+            f"登録メールアドレス: {p.email}\n"
+            "※このメールに心当たりがない場合は破棄してください。\n"
+            "-- \n"
+            "Fricsignage（送信専用）"
+        )
+        send_mail(p.email, subject, body)
+    except Exception:
+        pass
+
     return {"ok": True, "user_id": int(row[0])}
 
 def create_access_token(*, sub: str, username: str, role: str) -> str:
@@ -421,7 +453,7 @@ def login_user(p: LoginIn):
     if not row or not pwd_ctx.verify(p.password, row["password_hash"]):
         raise HTTPException(status_code=401, detail="invalid credentials")
     if not row["is_active"]:
-        raise HTTPException(status_code=403, detail="inactive user")
+        raise HTTPException(statuscode=403, detail="inactive user")  # ← 注意: FastAPIは status_code。typoがあれば修正
 
     token = create_access_token(sub=str(row["id"]), username=row["username"], role=row["role"])
     return {"ok": True, "token": token}
@@ -531,6 +563,12 @@ async def create_trucks(
     audio: UploadFile | None = File(None),  # ★ 任意で受ける（フロント送信に合わせる）
     authorization: Optional[str] = Header(None),  # ★ 任意でユーザー特定
 ):
+
+
+
+
+
+    print("トラック関数実行🚀")
     try:
         sched = json.loads(schedule)
         if not _valid_sched_dict(sched):
@@ -563,6 +601,8 @@ async def create_trucks(
 
     # ★ ここで確認メール（可能なら）
     user = try_get_user_from_auth(authorization)
+    print(user)
+
     if user and user.get("email"):
         # 件名・本文は最小実装（必要なら整形強化）
         images_cnt = len(files_trucks or [])

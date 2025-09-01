@@ -6,3 +6,5 @@ python-dotenv==1.0.1
 passlib[bcrypt]
 python-jose[cryptography]
 python-multipart
+fastapi-mail
+jinja2

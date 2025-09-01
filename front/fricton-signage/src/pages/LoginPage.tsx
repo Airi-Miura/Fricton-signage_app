@@ -37,12 +37,21 @@ export default function LoginPage() {
       if (!res.ok) {
         if (res.status === 401) throw new Error("IDまたはパスワードが違います");
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || "ログインに失敗しました");
+        throw new Error((data as any).detail || "ログインに失敗しました");
       }
 
-      const data = await res.json(); // { ok: true, user_id, username, name }
+      // { ok: true, token: "..." } を想定
+      const data = await res.json();
+
+      // ★ 追加: トークンを保存（/api/trucks などの Authorization 用）
+      if (data?.token) {
+        localStorage.setItem("token", data.token);
+      }
+
+      // 既存のフラグ/ユーザー情報はそのまま
       localStorage.setItem("auth", "ok");
       localStorage.setItem("user", JSON.stringify(data));
+
       nav("/app/truck", { replace: true });
     } catch (e: any) {
       setErr(e.message || "ログインに失敗しました");

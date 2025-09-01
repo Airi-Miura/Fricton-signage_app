@@ -70,6 +70,14 @@ services:
       # ※ 旧 YAML/SEED 系は削除（このAPIでは未使用）
       # ADMIN_SEED: （削除）
 
+      SMTP_HOST: "sv16089.xserver.jp"
+      SMTP_PORT: "587"
+      SMTP_USER: "info@fricton.com"
+      SMTP_PASS: "fricton99"
+      MAIL_FROM: "info@fricton.com"
+      SMTP_FROM_NAME: "Fricsignage" 
+      APP_BASE_URL: "http://localhost:3000"
+
     ports:
       - "8000:8000"
     depends_on:
@@ -78,6 +86,7 @@ services:
       # ★ 管理者DBの起動も待つ
       admin-db:
         condition: service_healthy
+
 
   front:
     build: ./front
