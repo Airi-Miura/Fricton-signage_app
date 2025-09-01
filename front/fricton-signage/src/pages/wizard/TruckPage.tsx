@@ -573,7 +573,7 @@ export default function TruckPage() {
         throw new Error(detail || txt || `HTTP ${res.status}`);
       }
 
-      alert("申請完了しました。\nご登録のメールアドレスへ確認メールを送信しました。\n info@fricton.comからおくってます。\n 迷惑メールフォルダも確認してください");
+      alert("申請を受け付けました。\n確認メールを info@fricton.com から送信しました。\n届かない場合は迷惑メールをご確認ください。");
       // 同週で再フェッチ（即グレー反映）＆選択クリア
       setAnchorDate(d => new Date(d));
       setPickedSlots(new Set());
