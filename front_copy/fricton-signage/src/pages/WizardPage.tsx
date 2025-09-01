@@ -18,6 +18,8 @@ export default function Wizard() {
   const Page =
     kind === "認証画面" ? RecognizePage :
     kind === "アドトラック管理" ? TruckPage_R :
+    // kind === "認証"?:
+    // kind === "非認証" ?:
     null;
 
   if (!Page) return <Navigate to="/" replace />;

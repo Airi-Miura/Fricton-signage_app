@@ -120,6 +120,19 @@ const fmtDuration = (sec: number) => {
   return `${m}:${String(s).padStart(2, "0")}`;
 };
 
+// ======= 文字色パレット（Word風・簡易版） =======
+const THEME_ROWS: string[][] = [
+  // 濃→薄を並べた行×数列
+  ["#000000", "#1f2937", "#374151", "#4b5563", "#6b7280", "#94a3b8", "#cbd5e1", "#e5e7eb", "#f3f4f6", "#ffffff"],
+  ["#0ea5e9", "#0284c7", "#0369a1", "#075985", "#e0f2fe", "#bae6fd", "#93c5fd", "#60a5fa", "#3b82f6", "#1d4ed8"],
+  ["#22c55e", "#16a34a", "#15803d", "#166534", "#dcfce7", "#bbf7d0", "#86efac", "#4ade80", "#34d399", "#059669"],
+  ["#f59e0b", "#d97706", "#b45309", "#92400e", "#ffedd5", "#fed7aa", "#fdba74", "#fb923c", "#f97316", "#ea580c"],
+  ["#ef4444", "#dc2626", "#b91c1c", "#991b1b", "#fee2e2", "#fecaca", "#fca5a5", "#f87171", "#ef4444", "#dc2626"],
+  ["#a855f7", "#9333ea", "#7e22ce", "#6b21a8", "#faf5ff", "#f3e8ff", "#e9d5ff", "#d8b4fe", "#c084fc", "#a855f7"],
+];
+
+const STANDARD_ROW: string[] = ["#ffffff","#000000","#808080","#ff0000","#ffa500","#ffff00","#9acd32","#00bfff","#1e90ff","#0000cd","#4b0082","#8b00ff"];
+
 // --- コンポーネント本体 ---
 export default function TruckPage() {
   const nav = useNavigate();
@@ -199,11 +212,24 @@ export default function TruckPage() {
   // テンプレ選択＆テキスト
   const [tplId, setTplId] = useState<string>(TEMPLATES[0].id);
   const currentTpl = useMemo(() => TEMPLATES.find(t => t.id === tplId)!, [tplId]);
+
   const [textValues, setTextValues] = useState<Record<string, string>>({});
   useEffect(() => {
     setTextValues(prev => {
       const next: Record<string, string> = { ...prev };
       currentTpl.textBoxes.forEach(tb => { if (!(tb.key in next)) next[tb.key] = ""; });
+      return next;
+    });
+  }, [currentTpl]);
+
+  // ★ 文字色（各テキスト枠ごと）
+  const [textColors, setTextColors] = useState<Record<string, string>>({});
+  useEffect(() => {
+    setTextColors(prev => {
+      const next = { ...prev };
+      currentTpl.textBoxes.forEach(tb => {
+        if (!(tb.key in next)) next[tb.key] = tb.color ?? "#ffffff";
+      });
       return next;
     });
   }, [currentTpl]);
@@ -241,7 +267,6 @@ export default function TruckPage() {
   const removeAtIndex = (idx: number) => {
     setImageFiles(prev => {
       const next = prev.filter((_, i) => i !== idx);
-      // アクティブインデックス補正（activeImgIndex は下で定義）
       setActiveImgIndex(i => Math.min(Math.max(0, i - (idx <= i ? 1 : 0)), Math.max(0, next.length - 1)));
       return next;
     });
@@ -325,7 +350,6 @@ export default function TruckPage() {
 
   // --- 画像プレビュー生成（タイプ制限＆実寸チェック） ---
   useEffect(() => {
-    // 以前のURLを解放
     setImgPreviews(prev => { prev.forEach(p => URL.revokeObjectURL(p.url)); return []; });
     setOtherFiles([]);
 
@@ -336,7 +360,6 @@ export default function TruckPage() {
     const tasks: Promise<void>[] = [];
 
     imageFiles.forEach(file => {
-      // MIME が空でも拡張子で画像判定
       const isImage = (file.type && file.type.startsWith("image/")) || /\.(jpe?g|png|webp)$/i.test(file.name);
       const typeOk = ALLOWED_IMAGE_TYPES.includes(file.type) || /\.(jpe?g|png|webp)$/i.test(file.name);
 
@@ -370,7 +393,6 @@ export default function TruckPage() {
       setOtherFiles(others);
     });
 
-    // ★ cleanupでURLをrevokeしない（StrictModeのダブル実行で即消えるため）
     return () => { cancelled = true; };
   }, [imageFiles]);
 
@@ -393,7 +415,8 @@ export default function TruckPage() {
   // ====== contentEditable: 非制御化のための参照＆スタイル ======
   const editableRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
-  // テキスト枠の CSS（直接編集できるよう pointerEvents を有効化）
+
+  // テキスト枠の CSS
   const textBoxStyle = (tb: TextBox, focused: boolean): React.CSSProperties => {
     const justifyContent = tb.valign === "middle" ? "center" : tb.valign === "bottom" ? "flex-end" : "flex-start";
     const alignItems = tb.align === "center" ? "center" : tb.align === "right" ? "flex-end" : "flex-start";
@@ -401,14 +424,14 @@ export default function TruckPage() {
       position: "absolute",
       left: `${tb.x}%`, top: `${tb.y}%`, width: `${tb.w}%`, height: `${tb.h}%`,
       display: "flex", justifyContent, alignItems, padding: isMobile ? 6 : 8,
-      color: tb.color ?? "#fff", fontWeight: tb.weight ?? 600, lineHeight: 1.2, textAlign: tb.align ?? "left",
+      fontWeight: tb.weight ?? 600, lineHeight: 1.2, textAlign: tb.align ?? "left",
       overflow: "hidden", wordBreak: "break-word", pointerEvents: "auto",
       outline: focused ? "2px solid #2563eb" : "none",
       borderRadius: 8,
     };
   };
 
-  // テンプレ切替時のみ 現在の state をDOMに初期同期（普段はDOMに任せる）
+  // テンプレ切替時にDOMへ初期同期
   useEffect(() => {
     currentTpl.textBoxes.forEach(tb => {
       const el = editableRefs.current[tb.key];
@@ -452,7 +475,7 @@ export default function TruckPage() {
     if (!el) return;
     const dAttr = el.getAttribute("data-didx");
     const sAttr = el.getAttribute("data-sidx");
-    if (dAttr == null || sAttr == null) return;
+    if (dAttr === null || sAttr === null) return;
 
     const dIdx = Number(dAttr);
     const sIdx = Number(sAttr);
@@ -478,7 +501,7 @@ export default function TruckPage() {
   // ===== 送信前ダイアログ制御 =====
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  // バリデーション（送信前の事前チェック）
+  // バリデーション
   function validateForSubmit(): string | null {
     if (pickedSlots.size === 0) return "配信時間帯を1つ以上選択してください";
     if (!imageFiles || imageFiles.length === 0) return "画像ファイルを1枚以上アップロードしてください";
@@ -541,14 +564,13 @@ export default function TruckPage() {
         (byDate[d] ??= []).push(t);
       });
 
-      // 送信（multipart/form-data）
       const fd = new FormData();
       fd.append("kind", KIND);
       fd.append("tpl_id", tplId);
       fd.append("text_values", JSON.stringify(effectiveText));
       fd.append("schedule", JSON.stringify(byDate));
       imageFiles.forEach(f => fd.append("files_trucks", f));
-      if (audioFile) fd.append("audio", audioFile); // 任意
+      if (audioFile) fd.append("audio", audioFile);
 
       const token = localStorage.getItem("token") ?? "";
 
@@ -557,10 +579,6 @@ export default function TruckPage() {
         body: fd,
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       });
-
-      if (!res.ok) {
-        console.error("trucks NG:", res.status, await res.text());
-      }
 
       const txt = await res.text();
       console.log("POST /api/trucks ->", res.status, txt);
@@ -574,7 +592,6 @@ export default function TruckPage() {
       }
 
       alert("申請を受け付けました。\n確認メールを info@fricton.com から送信しました。\n届かない場合は迷惑メールをご確認ください。");
-      // 同週で再フェッチ（即グレー反映）＆選択クリア
       setAnchorDate(d => new Date(d));
       setPickedSlots(new Set());
     } catch (err: any) {
@@ -586,9 +603,21 @@ export default function TruckPage() {
     }
   }
 
+  // ===== 文字色 UI（ポップオーバー） =====
+  const [colorOpen, setColorOpen] = useState(false);
+  const currentFocusColor = focusedKey ? (textColors[focusedKey] ?? (currentTpl.textBoxes.find(t => t.key === focusedKey)?.color ?? "#ffffff")) : "#ffffff";
+  const applyColor = (hex: string) => {
+    if (!focusedKey) return;
+    setTextColors(prev => ({ ...prev, [focusedKey]: hex }));
+  };
+  const resetColor = () => {
+    if (!focusedKey) return;
+    const def = currentTpl.textBoxes.find(t => t.key === focusedKey)?.color ?? "#ffffff";
+    setTextColors(prev => ({ ...prev, [focusedKey]: def }));
+  };
+
   return (
     <div style={{ maxWidth: isMobile ? 600 : 1000, margin: "24px auto", padding: isMobile ? 12 : 16 }}>
-      {/* プレースホルダー表示用のスタイル（contentEditable の空時に表示） */}
       <style>{`
         .ce[contenteditable][data-placeholder]:empty::before{
           content: attr(data-placeholder);
@@ -631,7 +660,6 @@ export default function TruckPage() {
       {/* 1) 画像/音声アップロード */}
       <h3 style={{ marginTop: 20 }}>素材アップロード</h3>
       <div style={{ display: "grid", gap: 12, marginTop: 8 }}>
-        {/* 初回選択（置き換え）— 常時表示 */}
         <label>
           画像ファイル（複数可・推奨サイズ {REQUIRED_W_Truck}×{REQUIRED_H_Truck} ・形式：jpg/jpeg/png/webp）
           <input
@@ -644,7 +672,6 @@ export default function TruckPage() {
           />
         </label>
 
-        {/* プレビュー（1枚以上あるとき） */}
         {imgPreviews.length > 0 && (
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
@@ -653,13 +680,7 @@ export default function TruckPage() {
                 合計 {imgPreviews.length} 枚{reservedMinutes > 0 ? ` / 上限 ${maxImages} 枚` : ""}
               </div>
               <div style={{ flex: 1 }} />
-
-              {/*追加ボタン → 隠し input を click*/}
-              <button type="button" onClick={() => appendInputRef.current?.click()}>
-                ファイルを追加
-              </button>
-
-              {/* 全削除 */}
+              <button type="button" onClick={() => appendInputRef.current?.click()}>ファイルを追加</button>
               <button
                 type="button"
                 onClick={() => setImageFiles([])}
@@ -669,7 +690,6 @@ export default function TruckPage() {
               </button>
             </div>
 
-            {/* 横スクロールのコンテナ */}
             <div
               ref={scrollerRef}
               style={{
@@ -700,7 +720,6 @@ export default function TruckPage() {
                     scrollSnapAlign: "center",
                   }}
                 >
-                  {/* 個別削除 */}
                   <button
                     type="button"
                     onClick={() => removeAtIndex(idx)}
@@ -737,7 +756,6 @@ export default function TruckPage() {
               ))}
             </div>
 
-            {/* 注意書き + 上限表示 */}
             <div style={{
               marginTop: 12,
               fontSize: 12,
@@ -763,7 +781,6 @@ export default function TruckPage() {
           </div>
         )}
 
-        {/* 音声（単一・任意） */}
         <label>
           音声ファイル（1つまで・任意）
           <input
@@ -782,15 +799,13 @@ export default function TruckPage() {
         )}
       </div>
 
-      {/* 2) テキスト入力（削除：プレビュー上で直接編集） */}
-
       {/* 3) ライブプレビュー（ズームなし・常に全体表示） */}
       <h3 style={{ marginTop: 24 }}>プレビュー</h3>
 
       <div
         style={{
           width: "100%",
-          maxWidth: isMobile ? "100%" : 1000, // デスクトップは少し大きめに見せる
+          maxWidth: isMobile ? "100%" : 1000,
           aspectRatio: "890 / 330",
           position: "relative",
           border: "1px solid #ddd",
@@ -808,7 +823,109 @@ export default function TruckPage() {
           />
         )}
 
-        {/* 画像枠：アップロード画像を1枚だけ表示（手動切替対応） */}
+        {/* 文字色ボタン（右上固定） */}
+        <div
+          style={{
+            position: "absolute",
+            top: 8,
+            right: 8,
+            zIndex: 1000,
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            pointerEvents: "auto",
+          }}
+          onMouseDown={(e) => { e.stopPropagation(); /* フォーカスを奪わない */ }}
+        >
+          <button
+            type="button"
+            onMouseDown={(e)=>e.preventDefault()}
+            onClick={() => setColorOpen(o => !o)}
+            title="文字色"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              background: "rgba(255,255,255,.9)",
+              border: "1px solid #e5e7eb",
+              padding: "6px 10px",
+              borderRadius: 10,
+              cursor: "pointer"
+            }}
+          >
+            <span style={{ fontWeight: 700 }}>A</span>
+            <span style={{ width: 18, height: 12, background: currentFocusColor, borderRadius: 3, border: "1px solid #00000022", display: "inline-block" }} />
+          </button>
+          <button
+            type="button"
+            onMouseDown={(e)=>e.preventDefault()}
+            onClick={resetColor}
+            title="リセット（テンプレ既定色）"
+            style={{
+              background: "rgba(255,255,255,.9)",
+              border: "1px solid #e5e7eb",
+              padding: "6px 10px",
+              borderRadius: 10,
+              cursor: "pointer"
+            }}
+          >
+            リセット
+          </button>
+        </div>
+
+        {/* パレット（ポップオーバー） */}
+        {colorOpen && (
+          <div
+            style={{
+              position: "absolute",
+              top: 48,
+              right: 8,
+              zIndex: 1000,
+              background: "#fff",
+              borderRadius: 12,
+              border: "1px solid #e5e7eb",
+              boxShadow: "0 10px 30px rgba(0,0,0,.15)",
+              padding: 10,
+              width: isMobile ? 280 : 360,
+              pointerEvents: "auto"
+            }}
+            onMouseDown={(e)=>e.preventDefault()}
+          >
+            <div style={{ fontSize: 12, fontWeight: 700, margin: "4px 4px 6px" }}>テーマの色</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(10, 1fr)", gap: 6 }}>
+              {THEME_ROWS.flat().map((hex, i) => (
+                <button
+                  key={`t-${i}-${hex}`}
+                  onMouseDown={(e)=>e.preventDefault()}
+                  onClick={() => applyColor(hex)}
+                  title={hex}
+                  style={{
+                    width: 24, height: 24, borderRadius: 4, border: "1px solid #e5e7eb",
+                    background: hex, cursor: "pointer"
+                  }}
+                />
+              ))}
+            </div>
+
+            <div style={{ fontSize: 12, fontWeight: 700, margin: "10px 4px 6px" }}>標準の色</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(12, 1fr)", gap: 6 }}>
+              {STANDARD_ROW.map((hex, i) => (
+                <button
+                  key={`s-${i}-${hex}`}
+                  onMouseDown={(e)=>e.preventDefault()}
+                  onClick={() => applyColor(hex)}
+                  title={hex}
+                  style={{
+                    width: 24, height: 24, borderRadius: 12, border: "1px solid #e5e7eb",
+                    background: hex, cursor: "pointer"
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 画像枠 */}
         {activeImgUrl && (
           <div
             style={{
@@ -830,9 +947,10 @@ export default function TruckPage() {
           </div>
         )}
 
-        {/* テキスト枠（プレビュー上で直接編集：非制御） */}
+        {/* テキスト枠（直接編集） */}
         {currentTpl.textBoxes.map(tb => {
           const maxLines = tb.lines ?? 2;
+          const colorToUse = textColors[tb.key] ?? tb.color ?? "#fff";
           return (
             <div
               key={tb.key}
@@ -853,25 +971,20 @@ export default function TruckPage() {
                   const el = e.currentTarget as HTMLDivElement;
                   const text = (el.innerText || "").replace(/\r/g, "");
                   const limited = limitLines(text, maxLines).trim();
-
-                  // DOMとstateを同期（※ここでだけDOMを書き換える）
                   if (limited) {
                     if (el.innerText !== limited) el.innerText = limited;
                     setTextValues(prev => ({ ...prev, [tb.key]: limited }));
                   } else {
-                    // 空ならDOMも完全に空にしてplaceholderを表示
                     el.innerHTML = "";
                     setTextValues(prev => ({ ...prev, [tb.key]: "" }));
                   }
                 }}
                 onInput={(e) => {
-                  // 入力中はDOMをいじらない（caretジャンプ防止）
                   const el = e.currentTarget as HTMLDivElement;
                   const text = (el.innerText || "").replace(/\r/g, "");
                   setTextValues(prev => ({ ...prev, [tb.key]: text }));
                 }}
                 onPaste={(e) => {
-                  // プレーンテキストのみ貼付（HTML混入防止）
                   e.preventDefault();
                   const t = (e.clipboardData || (window as any).clipboardData).getData("text") || "";
                   document.execCommand("insertText", false, t);
@@ -882,7 +995,7 @@ export default function TruckPage() {
                   overflow: "hidden",
                   whiteSpace: "pre-wrap",
                   fontSize: (tb.fontSize ?? (isMobile ? 14 : 16)),
-                  color: tb.color ?? "#fff",
+                  color: colorToUse,
                   outline: "none",
                   cursor: "text",
                 }}
@@ -891,7 +1004,6 @@ export default function TruckPage() {
           );
         })}
 
-        {/* それ以外のファイル（必要ならここは外へ移動可） */}
         {otherFiles.length > 0 && (
           <div style={{ position: "absolute", bottom: 6, left: 6, fontSize: 12, opacity: 0.85, background: "rgba(255,255,255,.7)", borderRadius: 4, padding: "2px 6px" }}>
             画像/動画以外の選択：{otherFiles.join(", ")}
@@ -902,7 +1014,6 @@ export default function TruckPage() {
       {/* 4) 配信スケジュール（週グリッド） */}
       <h3 style={{ marginTop: 24 }}>配信スケジュール</h3>
 
-      {/* 週ナビ（共通） */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
         <button onClick={goPrevWeek} disabled={loading}>◀︎ 前の週</button>
         <button onClick={goThisWeek} disabled={loading}>今週</button>
@@ -914,7 +1025,6 @@ export default function TruckPage() {
         {bookedError && <div style={{ marginLeft: 12, fontSize: 12, color: "#b91c1c" }}>{bookedError}</div>}
       </div>
 
-      {/* ====== モバイル：週グリッド（7日×縦スクロール） ====== */}
       {isMobile ? (
         <div
           style={{
@@ -931,9 +1041,7 @@ export default function TruckPage() {
           onTouchMove={handleTouchMoveGrid}
           onTouchEnd={handleTouchEndGrid}
         >
-          {/* 左上空セル */}
           <div style={{ position: "sticky", top: 0, background: "#fff", zIndex: 1, borderRight: "1px solid #ddd", borderBottom: "1px solid #ddd" }} />
-          {/* 曜日ヘッダー */}
           {weekDays.map((d, i) => (
             <div
               key={`mh-${i}`}
@@ -955,10 +1063,8 @@ export default function TruckPage() {
             </div>
           ))}
 
-          {/* 時間行 */}
           {slots.map((t, sIdx) => (
             <div key={`mrow-${t}`} style={{ display: "contents" }}>
-              {/* 左の時間ラベル */}
               <div
                 style={{
                   position: "sticky",
@@ -975,7 +1081,6 @@ export default function TruckPage() {
                 {t}
               </div>
 
-              {/* 各日のセル */}
               {weekDays.map((_, dIdx) => {
                 const key = `${dayISO[dIdx]}_${t}`;
                 const disabled = booked.has(key);
@@ -1006,7 +1111,6 @@ export default function TruckPage() {
           ))}
         </div>
       ) : (
-        // ====== デスクトップ：従来の週グリッド ======
         <div
           style={{
             display: "grid",
@@ -1019,7 +1123,6 @@ export default function TruckPage() {
             userSelect: "none",
           }}
         >
-          {/* ヘッダー */}
           <div style={{ position: "sticky", top: 0, background: "#fff", zIndex: 1, borderRight: "1px solid #ddd", borderBottom: "1px solid #ddd" }} />
           {weekDays.map((d, i) => (
             <div
@@ -1040,10 +1143,8 @@ export default function TruckPage() {
             </div>
           ))}
 
-          {/* 時間行 */}
           {slots.map((t, sIdx) => (
             <div key={`row-${t}`} style={{ display: "contents" }}>
-              {/* 時間ラベル */}
               <div
                 style={{
                   borderRight: "1px solid " + "#eee",
@@ -1059,7 +1160,6 @@ export default function TruckPage() {
                 {t}
               </div>
 
-              {/* 7列のスロット */}
               {weekDays.map((_, dIdx) => {
                 const key = `${dayISO[dIdx]}_${t}`;
                 const disabled = booked.has(key);
