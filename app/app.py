@@ -119,99 +119,37 @@ def init_app_db_with_retry():
         """))
 
         conn.execute(text("""
-       DO $$
+        DO $$
         BEGIN
           IF NOT EXISTS (
             SELECT 1 FROM information_schema.columns
-            WHERE table_name='submissions' AND column_name='status'
+            WHERE table_name='users' AND column_name='display_name'
           ) THEN
-            ALTER TABLE submissions ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';
-            CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status);
+            ALTER TABLE users ADD COLUMN display_name TEXT;
           END IF;
 
           IF NOT EXISTS (
             SELECT 1 FROM information_schema.columns
-            WHERE table_name='submissions' AND column_name='decided_at'
+            WHERE table_name='users' AND column_name='role'
           ) THEN
-            ALTER TABLE submissions ADD COLUMN decided_at TIMESTAMPTZ NULL;
+            ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'staff';
           END IF;
 
           IF NOT EXISTS (
             SELECT 1 FROM information_schema.columns
-            WHERE table_name='submissions' AND column_name='company_name'
+            WHERE table_name='users' AND column_name='is_active'
           ) THEN
-            ALTER TABLE submissions ADD COLUMN company_name TEXT NOT NULL DEFAULT '';
+            ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT TRUE;
           END IF;
 
-          -- ★ ユーザー文言・色・行
+          -- ★ email カラム（NULL許可で追加。既存ユーザに配慮）
           IF NOT EXISTS (
             SELECT 1 FROM information_schema.columns
-            WHERE table_name='submissions' AND column_name='message'
+            WHERE table_name='users' AND column_name='email'
           ) THEN
-            ALTER TABLE submissions ADD COLUMN message TEXT NULL;
-          END IF;
-
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='submissions' AND column_name='caption'
-          ) THEN
-            ALTER TABLE submissions ADD COLUMN caption TEXT NULL;
-          END IF;
-
-          -- ↓↓↓ この行を修正（閉じクォートを追加）↓↓↓
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='submissions' AND column_name='text_color'
-          ) THEN
-            ALTER TABLE submissions ADD COLUMN text_color TEXT NULL;
-          END IF;
-
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='submissions' AND column_name='text_values'
-          ) THEN
-            ALTER TABLE submissions ADD COLUMN text_values JSONB NULL;
-          END IF;
-
-          -- ★ 追加: テキスト色マップ（複数テキストボックス対応）
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='submissions' AND column_name='text_colors'
-          ) THEN
-            ALTER TABLE submissions ADD COLUMN text_colors JSONB NULL;
-          END IF;
-
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='submissions' AND column_name='lines'
-          ) THEN
-            ALTER TABLE submissions ADD COLUMN lines JSONB NULL;
-          END IF;
-
-          -- ★ プレビュー配置・スタイル
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='submissions' AND column_name='overlay'
-          ) THEN
-            ALTER TABLE submissions ADD COLUMN overlay JSONB NULL;
-          END IF;
-
-          -- ★ 申請者ひも付け（審査結果メール用）
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='submissions' AND column_name='requester_user_id'
-          ) THEN
-            ALTER TABLE submissions ADD COLUMN requester_user_id BIGINT NULL;
-          END IF;
-
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='submissions' AND column_name='requester_email'
-          ) THEN
-            ALTER TABLE submissions ADD COLUMN requester_email TEXT NULL;
+            ALTER TABLE users ADD COLUMN email TEXT;
           END IF;
         END $$;
-
         """))
 
         conn.execute(text("""
@@ -284,13 +222,6 @@ def init_app_db_with_retry():
             ALTER TABLE submissions ADD COLUMN text_color TEXT NULL;
           END IF;
 
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='submissions' AND column_name='text_values'
-          ) THEN
-            ALTER TABLE submissions ADD COLUMN text_values JSONB NULL;
-          END IF;
-          
           -- ★ 追加: テキスト色マップ（複数テキストボックス対応）
           IF NOT EXISTS (
             SELECT 1 FROM information_schema.columns
@@ -693,23 +624,6 @@ def _parse_text_colors(value: Optional[str]) -> Optional[Dict[str, str]]:
         out[k] = v2.lower()
     return out
 
-def _parse_text_values(value: Optional[str]) -> Optional[Dict[str, str]]:
-    if not value:
-        return None
-    try:
-        obj = json.loads(value)
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid text_values JSON")
-    if not isinstance(obj, dict):
-        raise HTTPException(status_code=400, detail="text_values must be an object")
-    out: Dict[str, str] = {}
-    for k, v in obj.items():
-        if not isinstance(k, str) or not isinstance(v, str):
-            raise HTTPException(status_code=400, detail="text_values values must be strings")
-        out[k] = v
-    return out
-
-
 # --- trucks ---
 @app.post("/api/trucks")
 async def create_trucks(
@@ -786,14 +700,12 @@ async def create_trucks(
             text("""
                 INSERT INTO submissions(
                     kind, title, schedule_json,
-                    company_name, message, caption, text_color, text_colors, text_values, lines, overlay,
+                    company_name, message, caption, text_color, text_colors, lines, overlay,
                     requester_user_id, requester_email
                 )
                 VALUES (:k, :t, CAST(:s AS JSONB),
-                    :company, :msg, :cap,
-                    :color, CAST(:colors AS JSONB), CAST(:texts AS JSONB),  -- ★ 追加
-                    CAST(:lines AS JSONB), CAST(:overlay AS JSONB),
-                    :ruid, :remail)
+                        :company, :msg, :cap, :color, CAST(:colors AS JSONB), CAST(:lines AS JSONB), CAST(:overlay AS JSONB),
+                        :ruid, :remail)
                 RETURNING id
             """),
             {
@@ -805,7 +717,6 @@ async def create_trucks(
                 "cap": caption,
                 "color": color_value,
                 "colors": json.dumps(color_map) if color_map is not None else None,
-                "texts": json.dumps(texts_map) if texts_map is not None else None, 
                 "lines": json.dumps(lines_list) if lines_list is not None else None,
                 "overlay": json.dumps(overlay_obj) if overlay_obj is not None else None,
                 "ruid": requester_user_id,
@@ -854,16 +765,6 @@ async def create_trucks(
     return {"ok": True, "submission_id": sub_id, "files": saved_paths}
 
 # --- Bulk（最小修正＋文言/overlay対応） ---
-
-
-# =============================
-# 予約枠（グレーアウト対象）取得
-# =============================
-def _parse_date(date_str: str) -> datetime.date:
-    try:
-        return datetime.strptime(date_str, "%Y-%m-%d").date()
-    except Exception:
-        raise HTTPException(status_code=400, detail=f"invalid date format: {date_str} (YYYY-MM-DD expected)")
 @app.post("/api/submit/bulk")
 async def create_bulk(
     title: str = Form(""),
@@ -875,15 +776,13 @@ async def create_bulk(
     caption: Optional[str] = Form(None),
     text_color: Optional[str] = Form(None),
     textColor: Optional[str] = Form(None),
-    text_values: Optional[str] = Form(None),          # ★ 追加
-    textValues: Optional[str] = Form(None),           # ★ 追加
     text_colors: Optional[str] = Form(None),          # ★ 追加
-    textColors: Optional[str] = Form(None),           # ★ 追加
+    textColors: Optional[str] = Form(None),           # ★ 追加 camelCase
     lines: Optional[str] = Form(None),
     words: Optional[str] = Form(None),
     overlay: Optional[str] = Form(None),
     company_name: str = Form(""),
-    authorization: Optional[str] = Header(None),      # 申請者情報
+    authorization: Optional[str] = Header(None),       # ★ 申請者も残せるように
 ):
     # スケジュール検証
     try:
@@ -901,6 +800,7 @@ async def create_bulk(
     if not lines and words:
         lines = words
     color_value = text_color or textColor
+    color_map = _parse_text_colors(text_colors or textColors)
 
     if lines:
         try:
@@ -918,10 +818,6 @@ async def create_bulk(
         except Exception:
             overlay_obj = None
 
-    # ★ ここで text_values / text_colors をパース
-    texts_map = _parse_text_values(text_values or textValues)
-    colors_map = _parse_text_colors(text_colors or textColors)
-
     requester = try_get_user_from_auth(authorization)
     requester_user_id = requester["id"] if requester else None
     requester_email = requester.get("email") if requester else None
@@ -933,15 +829,11 @@ async def create_bulk(
             text("""
                 INSERT INTO submissions(
                     kind, title, schedule_json,
-                    company_name, message, caption,
-                    text_color, text_colors, text_values,   -- ★ 追加
-                    lines, overlay,
+                    company_name, message, caption, text_color, text_colors, lines, overlay,
                     requester_user_id, requester_email
                 )
                 VALUES (:k, :t, CAST(:s AS JSONB),
-                        :company, :msg, :cap,
-                        :color, CAST(:colors AS JSONB), CAST(:texts AS JSONB),
-                        CAST(:lines AS JSONB), CAST(:overlay AS JSONB),
+                        :company, :msg, :cap, :color, CAST(:colors AS JSONB), CAST(:lines AS JSONB), CAST(:overlay AS JSONB),
                         :ruid, :remail)
                 RETURNING id
             """),
@@ -953,8 +845,7 @@ async def create_bulk(
                 "msg": message,
                 "cap": caption,
                 "color": color_value,
-                "colors": json.dumps(colors_map) if colors_map is not None else None,  # ★
-                "texts": json.dumps(texts_map) if texts_map is not None else None,     # ★
+                "colors": json.dumps(color_map) if color_map is not None else None,
                 "lines": json.dumps(lines_list) if lines_list is not None else None,
                 "overlay": json.dumps(overlay_obj) if overlay_obj is not None else None,
                 "ruid": requester_user_id,
@@ -969,6 +860,14 @@ async def create_bulk(
 
     return {"ok": True, "result": result}
 
+# =============================
+# 予約枠（グレーアウト対象）取得
+# =============================
+def _parse_date(date_str: str) -> datetime.date:
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"invalid date format: {date_str} (YYYY-MM-DD expected)")
 
 @app.get("/api/truck/booked")
 def get_booked_slots_truck(
@@ -1081,8 +980,7 @@ class SubmissionOut(BaseModel):
     caption: Optional[str] = None
     lines: Optional[List[str]] = None
     textColor: Optional[str] = None               # 後方互換（単色）
-    textColors: Optional[Dict[str, str]] = None 
-    textValues: Optional[Dict[str, str]] = None
+    textColors: Optional[Dict[str, str]] = None   # ★ 追加（複数）
     overlay: Optional[dict] = None
     # ★ 追加: 申請者・スケジュール
     userId: Optional[int] = None
@@ -1118,7 +1016,6 @@ def list_review_queue(status: str = Query("pending"), claims=Depends(require_adm
         company = r["company_name"] or r["title"] or ""
         image_url = _file_path_to_url(r["first_path"])
         submitted_at = (r["created_at"] or datetime.utcnow()).isoformat()
-        
         lines_val = r.get("lines")
         if not isinstance(lines_val, list):
             lines_val = None
@@ -1139,8 +1036,7 @@ def list_review_queue(status: str = Query("pending"), claims=Depends(require_adm
             caption=r.get("caption"),
             lines=lines_val,
             textColor=r.get("text_color"),
-            textColors=(r.get("text_colors") if isinstance(r.get("text_colors"), dict) else None),
-            textValues=None,
+            textColors=colors_val,
             overlay=r.get("overlay"),
             userId=(int(r["requester_user_id"]) if r.get("requester_user_id") is not None else None),
             schedule=schedule_val,
