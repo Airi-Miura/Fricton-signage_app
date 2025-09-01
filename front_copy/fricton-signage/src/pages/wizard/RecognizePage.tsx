@@ -6,6 +6,29 @@ type Submission = {
   imageUrl: string;
   title?: string;
   submittedAt: string; // ISO
+
+  // ★ 追加: 文字情報（ユーザ画面のプレビューを再現するため）
+  message?: string;
+  caption?: string;
+  lines?: string[];
+  textColor?: string;
+
+  // ★ 追加: プレビュー配置・スタイル一式（ユーザ画面のTEMPLATESに相当）
+  overlay?: {
+    templateId?: string;
+    imageBox?: { x: number; y: number; w: number; h: number; mode: "cover" | "contain" };
+    textBoxes?: Array<{
+      key: string;
+      x: number; y: number; w: number; h: number;
+      align?: "left" | "center" | "right";
+      valign?: "top" | "middle" | "bottom";
+      color?: string;
+      fontSize?: number;
+      weight?: 400 | 600 | 700 | 800;
+      lines?: number;
+    }>;
+    values?: Record<string, string>;
+  };
 };
 
 type Reviewed = Submission & { status: "approved" | "rejected"; decidedAt: string };
@@ -30,6 +53,123 @@ const apiPost = async (path: string) => {
   return res;
 };
 
+/** ★ 追加: overlay を使って文字を重ね描画する小コンポーネント */
+function TextOverlay({
+  item,
+  mode = "card", // card | preview | reviewed
+}: {
+  item: Submission;
+  mode?: "card" | "preview" | "reviewed";
+}) {
+  const tbJustify = (v?: "top" | "middle" | "bottom") =>
+    v === "middle" ? "center" : v === "bottom" ? "flex-end" : "flex-start";
+  const textAlign = (a?: "left" | "center" | "right") => a ?? "left";
+
+  // カード/レビューカードは小さめなので少し縮小、プレビューは等倍
+  const fontScale = mode === "preview" ? 1.0 : 0.6;
+
+  // overlay がある場合は overlay.values を優先して描画
+  if (item.overlay?.textBoxes && item.overlay.values) {
+    return (
+      <>
+        {item.overlay.textBoxes.map((tb, idx) => {
+          const value = item.overlay!.values![tb.key] ?? "";
+          if (!value) return null;
+          // 指定がなければバックアップとして Submission.textColor
+          const color = tb.color || item.textColor || "#ffffff";
+          const weight = tb.weight ?? 700;
+          const fontSize = Math.max(10, Math.round((tb.fontSize ?? 24) * fontScale)); // px基準
+          const lines = (value || "").split(/\r?\n/);
+          const maxLines = tb.lines && tb.lines > 0 ? tb.lines : undefined;
+          const showLines = maxLines ? lines.slice(0, maxLines) : lines;
+
+          return (
+            <div
+              key={`${tb.key}-${idx}`}
+              style={{
+                position: "absolute",
+                left: `${tb.x}%`,
+                top: `${tb.y}%`,
+                width: `${tb.w}%`,
+                height: `${tb.h}%`,
+                display: "flex",
+                justifyContent: tbJustify(tb.valign),
+                textAlign: textAlign(tb.align),
+                // テキストの影を薄く入れて視認性UP（最小限）
+                textShadow: "0 1px 3px rgba(0,0,0,0.35)",
+                pointerEvents: "none",
+                overflow: "hidden",
+              }}
+            >
+              <div style={{ width: "100%" }}>
+                {showLines.map((ln, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      color,
+                      fontSize,
+                      fontWeight: weight,
+                      lineHeight: 1.25,
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {ln}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </>
+    );
+  }
+
+  // overlay が無い既存データ向けの後方互換（message / caption / lines / textColor）
+  const fallbackTexts: string[] = [];
+  if (item.title) fallbackTexts.push(item.title);
+  if (item.message) fallbackTexts.push(item.message);
+  if (item.caption) fallbackTexts.push(item.caption);
+  if (item.lines && item.lines.length > 0) fallbackTexts.push(...item.lines);
+  if (fallbackTexts.length === 0) return null;
+
+  const color = item.textColor || "#ffffff";
+  const baseSize = mode === "preview" ? 28 : 16;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: "5%",
+        bottom: "6%",
+        width: "90%",
+        display: "flex",
+        justifyContent: "center",
+        textAlign: "center",
+        textShadow: "0 1px 3px rgba(0,0,0,0.35)",
+        pointerEvents: "none",
+      }}
+    >
+      <div style={{ width: "100%" }}>
+        {fallbackTexts.slice(0, 5).map((t, i) => (
+          <div
+            key={i}
+            style={{
+              color,
+              fontSize: Math.round(baseSize * (1 - i * 0.08)),
+              fontWeight: i === 0 ? 700 : 600,
+              lineHeight: 1.25,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {t}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function AdminAuthPage() {
   // 上段：未認証（待機中）
@@ -88,7 +228,6 @@ export default function AdminAuthPage() {
     const item = pending.find(p => p.id === id);
     if (!item) return;
     try {
-      // ★ 絶対URL + （あれば）Bearer 付与
       await apiPost(`/api/admin/review/${id}/approve`);
       // 楽観的更新：上から外し、下に流す
       setPending(prev => prev.filter(p => p.id !== id));
@@ -111,7 +250,6 @@ export default function AdminAuthPage() {
     const item = pending.find(p => p.id === id);
     if (!item) return;
     try {
-      // ★ 絶対URL + （あれば）Bearer 付与
       await apiPost(`/api/admin/review/${id}/reject`);
       setPending(prev => prev.filter(p => p.id !== id));
       setReviewed(prev => [
@@ -193,6 +331,8 @@ export default function AdminAuthPage() {
                     }}
                     draggable={false}
                   />
+                  {/* ★ 追加: テキスト重ね描画 */}
+                  <TextOverlay item={item} mode="card" />
                 </div>
                 <div style={{ padding: 10, display: "grid", gap: 6 }}>
                   <div style={{ fontWeight: 600, fontSize: 14 }}>
@@ -262,6 +402,8 @@ export default function AdminAuthPage() {
                     }}
                     draggable={false}
                   />
+                  {/* ★ 追加: テキスト重ね描画（処理済み側） */}
+                  <TextOverlay item={item} mode="reviewed" />
                   <span
                     style={{
                       position: "absolute",
@@ -271,20 +413,20 @@ export default function AdminAuthPage() {
                       fontWeight: 700,
                       padding: "4px 8px",
                       borderRadius: 999,
-                      color: item.status === "approved" ? "#065f46" : "#7f1d1d",
-                      background: item.status === "approved" ? "#d1fae5" : "#fee2e2",
+                      color: (item as Reviewed).status === "approved" ? "#065f46" : "#7f1d1d",
+                      background: (item as Reviewed).status === "approved" ? "#d1fae5" : "#fee2e2",
                       border: `1px solid ${
-                        item.status === "approved" ? "#10b981" : "#f87171"
+                        (item as Reviewed).status === "approved" ? "#10b981" : "#f87171"
                       }`,
                     }}
                   >
-                    {item.status === "approved" ? "認証済み" : "非認証"}
+                    {(item as Reviewed).status === "approved" ? "認証済み" : "非認証"}
                   </span>
                 </div>
                 <div style={{ padding: 10 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
                     <div style={{ fontWeight: 600 }}>{item.companyName}</div>
-                    <div style={{ color: "#666" }}>{fmt.format(new Date(item.decidedAt))}</div>
+                    <div style={{ color: "#666" }}>{fmt.format(new Date((item as Reviewed).decidedAt))}</div>
                   </div>
                 </div>
               </article>
@@ -307,19 +449,33 @@ export default function AdminAuthPage() {
             cursor: "zoom-out",
           }}
         >
-          <img
-            src={preview.imageUrl}
-            alt={preview.title ?? "preview"}
+          <div
             style={{
+              position: "relative",
               maxWidth: "90vw",
               maxHeight: "85vh",
-              objectFit: "contain",
-              boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
-              borderRadius: 12,
-              background: "#000",
+              aspectRatio: "16 / 9",
+              // 画像は contain に、上にテキストを重ねる
             }}
-            draggable={false}
-          />
+          >
+            <img
+              src={preview.imageUrl}
+              alt={preview.title ?? "preview"}
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: "100%",
+                height: "100%",
+                objectFit: "contain",
+                boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
+                borderRadius: 12,
+                background: "#000",
+              }}
+              draggable={false}
+            />
+            {/* ★ 追加: プレビューにも文字重ね */}
+            <TextOverlay item={preview} mode="preview" />
+          </div>
         </div>
       )}
     </div>

@@ -9,7 +9,7 @@ from typing import List, Optional, Dict, Tuple
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, EmailStr  # ★ EmailStr を追加
+from pydantic import BaseModel, Field, EmailStr
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from passlib.context import CryptContext
@@ -48,12 +48,12 @@ SMTP_PASS = os.getenv("SMTP_PASS")
 SMTP_FROM_ADDR = (
     os.getenv("SMTP_FROM_ADDR")
     or os.getenv("MAIL_FROM")
-    or os.getenv("SMTP_FROM")      # ← どちらか入っていれば拾う
+    or os.getenv("SMTP_FROM")
     or (SMTP_USER or "")
 )
 SMTP_FROM_NAME = (
     os.getenv("SMTP_FROM_NAME")
-    or os.getenv("MAIL_FROM_NAME") # ← 追加
+    or os.getenv("MAIL_FROM_NAME")
     or "Fricsignage"
 )
 
@@ -65,12 +65,8 @@ app = FastAPI(title="fricsignage API")
 
 # ---- 簡易メールヘルパ ----
 def send_mail(to_addr: str, subject: str, body: str) -> None:
-    """
-    SMTP_* 環境変数が揃っていない場合は送信せずに戻る（安全にスキップ）
-    """
-
+    """SMTP_* が揃っていない場合は送信せずに戻る"""
     if not (SMTP_HOST and SMTP_USER and SMTP_PASS and SMTP_FROM_ADDR and to_addr):
-        # 必要情報が無い場合は黙ってスキップ（ログ等入れたければここで）
         return
     import smtplib
     from email.mime.text import MIMEText
@@ -81,12 +77,6 @@ def send_mail(to_addr: str, subject: str, body: str) -> None:
     msg["From"] = formataddr((SMTP_FROM_NAME, SMTP_FROM_ADDR))
     msg["To"] = to_addr
 
-    print(msg["From"])
-    print(msg["To"])
-    print(msg["Subject"])
-    print(SMTP_FROM_ADDR)
-
-    # 587(STARTTLS) を既定。465 を使う場合は SMTP_SSL に置き換え
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
         s.starttls()
         s.login(SMTP_USER, SMTP_PASS)
@@ -211,6 +201,48 @@ def init_app_db_with_retry():
         END $$;
         """))
 
+        # ★ 追加: ユーザー文言を保存するカラム群（存在しなければ追加）
+        conn.execute(text("""
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='submissions' AND column_name='message'
+          ) THEN
+            ALTER TABLE submissions ADD COLUMN message TEXT NULL;
+          END IF;
+
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='submissions' AND column_name='caption'
+          ) THEN
+            ALTER TABLE submissions ADD COLUMN caption TEXT NULL;
+          END IF;
+
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='submissions' AND column_name='text_color'
+          ) THEN
+            ALTER TABLE submissions ADD COLUMN text_color TEXT NULL;
+          END IF;
+
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='submissions' AND column_name='lines'
+          ) THEN
+            ALTER TABLE submissions ADD COLUMN lines JSONB NULL;
+          END IF;
+
+          -- ★ 追加: プレビュー配置・スタイルを丸ごと持つ
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='submissions' AND column_name='overlay'
+          ) THEN
+            ALTER TABLE submissions ADD COLUMN overlay JSONB NULL;
+          END IF;
+        END $$;
+        """))
+
         # submission_files
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS submission_files(
@@ -312,7 +344,7 @@ class RegisterIn(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
     password: str = Field(..., min_length=6, max_length=128)
     name: str = Field(..., min_length=1, max_length=64)
-    email: EmailStr = Field(...)  # ★ 追加（必須）
+    email: EmailStr = Field(...)
 
 class LoginIn(BaseModel):
     username: str
@@ -359,7 +391,6 @@ def register_user(p: RegisterIn):
                 {"u": uname, "h": pw_hash, "n": p.name.strip(), "e": p.email.strip()}
             ).first()
     except IntegrityError as e:
-        # username / email 重複の出し分け（ざっくり）
         msg = str(e).lower()
         if "username" in msg:
             raise HTTPException(status_code=409, detail="username already exists")
@@ -367,7 +398,6 @@ def register_user(p: RegisterIn):
             raise HTTPException(status_code=409, detail="email already exists")
         raise HTTPException(status_code=409, detail="already exists")
 
-    # ★ 登録完了メールを送信（失敗してもAPI成功は維持）
     try:
         subject = "【Fricsignage】ご登録ありがとうございます"
         body = (
@@ -408,7 +438,6 @@ def require_admin(authorization: str = Header(None)):
     if claims.get("role") != "admin":
         raise HTTPException(status_code=403, detail="not allowed")
 
-    # 管理認証DBの admin_users を確認
     uid = claims.get("sub")
     with engine_admin.begin() as conn:
         row = conn.execute(text("SELECT is_active FROM admin_users WHERE id=:id"), {"id": int(uid)}).first()
@@ -453,7 +482,7 @@ def login_user(p: LoginIn):
     if not row or not pwd_ctx.verify(p.password, row["password_hash"]):
         raise HTTPException(status_code=401, detail="invalid credentials")
     if not row["is_active"]:
-        raise HTTPException(statuscode=403, detail="inactive user")  # ← 注意: FastAPIは status_code。typoがあれば修正
+        raise HTTPException(status_code=403, detail="inactive user")
 
     token = create_access_token(sub=str(row["id"]), username=row["username"], role=row["role"])
     return {"ok": True, "token": token}
@@ -560,15 +589,41 @@ async def create_trucks(
     title: str = Form(""),
     schedule: str = Form(...),
     files_trucks: List[UploadFile] = File(...),
-    audio: UploadFile | None = File(None),  # ★ 任意で受ける（フロント送信に合わせる）
-    authorization: Optional[str] = Header(None),  # ★ 任意でユーザー特定
+    files_truck: Optional[List[UploadFile]] = File(None),   # 互換：旧名でも受ける
+    audio: UploadFile | None = File(None),
+    message: Optional[str] = Form(None),
+    caption: Optional[str] = Form(None),
+    text_color: Optional[str] = Form(None),
+    textColor: Optional[str] = Form(None),                   # camelCaseも受ける
+    lines: Optional[str] = Form(None),
+    words: Optional[str] = Form(None),                       # 互換：別名を吸収
+    overlay: Optional[str] = Form(None),                     # プレビュー設定(JSON文字列)
+    company_name: str = Form(""),
+    authorization: Optional[str] = Header(None),
 ):
+    # 正規化
+    lines_list: Optional[List[str]] = None
+    if not lines and words:
+        lines = words
+    color_value = text_color or textColor
 
+    if lines:
+        try:
+            candidate = json.loads(lines)
+            if isinstance(candidate, list):
+                lines_list = [str(x) for x in candidate]
+        except Exception:
+            lines_list = [s for s in lines.replace("\r\n", "\n").split("\n") if s.strip()]
 
+    # overlay パース
+    overlay_obj = None
+    if overlay:
+        try:
+            overlay_obj = json.loads(overlay)
+        except Exception:
+            overlay_obj = None
 
-
-
-    print("トラック関数実行🚀")
+    # スケジュール検証 & 競合
     try:
         sched = json.loads(schedule)
         if not _valid_sched_dict(sched):
@@ -589,27 +644,43 @@ async def create_trucks(
     with engine.begin() as conn:
         sub_id = conn.execute(
             text("""
-                INSERT INTO submissions(kind, title, schedule_json)
-                VALUES (:k, :t, CAST(:s AS JSONB))
+                INSERT INTO submissions(
+                    kind, title, schedule_json,
+                    company_name, message, caption, text_color, lines, overlay
+                )
+                VALUES (:k, :t, CAST(:s AS JSONB),
+                        :company, :msg, :cap, :color, CAST(:lines AS JSONB), CAST(:overlay AS JSONB))
                 RETURNING id
             """),
-            {"k": kind, "t": title, "s": json.dumps(sched)},
+            {
+                "k": kind,
+                "t": title,
+                "s": json.dumps(sched),
+                "company": company_name,
+                "msg": message,
+                "cap": caption,
+                "color": color_value,
+                "lines": json.dumps(lines_list) if lines_list is not None else None,
+                "overlay": json.dumps(overlay_obj) if overlay_obj is not None else None,
+            },
         ).scalar_one()
 
         _insert_slots(conn, kind, sub_id, sched)
-        saved_paths = await _save_files_for_submission(conn, sub_id, files_trucks)
 
-    # ★ ここで確認メール（可能なら）
+        # ファイル名の揺れを吸収
+        incoming_files = files_trucks or files_truck or []
+        saved_paths = await _save_files_for_submission(conn, sub_id, incoming_files)
+
+        # 音声も保存（あれば）
+        if audio:
+            saved_paths += await _save_files_for_submission(conn, sub_id, [audio])
+
+    # 申請受付メール（任意）
     user = try_get_user_from_auth(authorization)
-    print(user)
-
     if user and user.get("email"):
-        # 件名・本文は最小実装（必要なら整形強化）
-        images_cnt = len(files_trucks or [])
+        images_cnt = len(incoming_files)
         audio_txt = "あり" if audio else "なし"
-        # スケジュール要約
         try:
-            # {"YYYY-MM-DD":["HH:MM",...]} を "8/31 19:00, 19:30 ..." 風に要約
             def _fmt_day(d: str) -> str:
                 dt = datetime.strptime(d, "%Y-%m-%d").date()
                 return f"{dt.month}/{dt.day}"
@@ -620,7 +691,6 @@ async def create_trucks(
             sched_summary = "\n".join(parts) if parts else "-"
         except Exception:
             sched_summary = "-"
-
         subject = "【申請完了】アドトラックの申請を受け付けました"
         body = (
             f"{user.get('name') or user['username']} 様\n\n"
@@ -634,18 +704,28 @@ async def create_trucks(
         try:
             send_mail(user["email"], subject, body)
         except Exception:
-            # メール失敗は API 成功に影響させない（ログに留める運用推奨）
             pass
 
     return {"ok": True, "submission_id": sub_id, "files": saved_paths}
 
-# --- Bulk（最小修正） ---
+# --- Bulk（最小修正＋文言/overlay対応） ---
 @app.post("/api/submit/bulk")
 async def create_bulk(
     title: str = Form(""),
     schedule: str = Form(...),                        # {"YYYY-MM-DD":["HH:MM",...]}
     files_truck: Optional[List[UploadFile]] = File(None),
+
+    # 文言・スタイル・別名・overlay
+    message: Optional[str] = Form(None),
+    caption: Optional[str] = Form(None),
+    text_color: Optional[str] = Form(None),
+    textColor: Optional[str] = Form(None),
+    lines: Optional[str] = Form(None),
+    words: Optional[str] = Form(None),
+    overlay: Optional[str] = Form(None),
+    company_name: str = Form(""),
 ):
+    # スケジュール検証
     try:
         sched = json.loads(schedule)
         if not _valid_sched_dict(sched):
@@ -656,22 +736,58 @@ async def create_bulk(
     if not (files_truck and len(files_truck) > 0):
         raise HTTPException(status_code=400, detail="no files selected")
 
-    result = { "truck": {"submission_id": None, "files": []} }
+    # 文言正規化
+    lines_list: Optional[List[str]] = None
+    if not lines and words:
+        lines = words
+    color_value = text_color or textColor
+
+    if lines:
+        try:
+            candidate = json.loads(lines)
+            if isinstance(candidate, list):
+                lines_list = [str(x) for x in candidate]
+        except Exception:
+            lines_list = [s for s in lines.replace("\r\n", "\n").split("\n") if s.strip()]
+
+    # overlay パース
+    overlay_obj = None
+    if overlay:
+        try:
+            overlay_obj = json.loads(overlay)
+        except Exception:
+            overlay_obj = None
+
+    result = {"truck": {"submission_id": None, "files": []}}
 
     with engine.begin() as conn:
-        if files_truck and len(files_truck) > 0:
-            truck_id = conn.execute(
-                text("""
-                    INSERT INTO submissions(kind, title, schedule_json)
-                    VALUES (:k, :t, CAST(:s AS JSONB))
-                    RETURNING id
-                """),
-                {"k": "アドトラック", "t": title, "s": json.dumps(sched)},
-            ).scalar_one()
-            _insert_slots(conn, "アドトラック", truck_id, sched)
-            files = await _save_files_for_submission(conn, truck_id, files_truck)
-            result["truck"]["submission_id"] = int(truck_id)
-            result["truck"]["files"] = files
+        truck_id = conn.execute(
+            text("""
+                INSERT INTO submissions(
+                    kind, title, schedule_json,
+                    company_name, message, caption, text_color, lines, overlay
+                )
+                VALUES (:k, :t, CAST(:s AS JSONB),
+                        :company, :msg, :cap, :color, CAST(:lines AS JSONB), CAST(:overlay AS JSONB))
+                RETURNING id
+            """),
+            {
+                "k": "アドトラック",
+                "t": title,
+                "s": json.dumps(sched),
+                "company": company_name,
+                "msg": message,
+                "cap": caption,
+                "color": color_value,
+                "lines": json.dumps(lines_list) if lines_list is not None else None,
+                "overlay": json.dumps(overlay_obj) if overlay_obj is not None else None,
+            },
+        ).scalar_one()
+
+        _insert_slots(conn, "アドトラック", truck_id, sched)
+        files = await _save_files_for_submission(conn, truck_id, files_truck)
+        result["truck"]["submission_id"] = int(truck_id)
+        result["truck"]["files"] = files
 
     return {"ok": True, "result": result}
 
@@ -771,7 +887,7 @@ def rename_admin_username(p: AdminRenameIn, claims=Depends(require_admin)):
     return {"ok": True, "username": new_uname}
 
 # =========================================================
-# 追加: 管理審査API（フロントが参照する3エンドポイント）
+# 追加: 管理審査API（フロントが参照するエンドポイント）
 # =========================================================
 
 def _file_path_to_url(p: Optional[str]) -> str:
@@ -790,6 +906,12 @@ class SubmissionOut(BaseModel):
     imageUrl: str
     title: str | None = None
     submittedAt: str  # ISO
+    # 文言・スタイル
+    message: Optional[str] = None
+    caption: Optional[str] = None
+    lines: Optional[List[str]] = None
+    textColor: Optional[str] = None
+    overlay: Optional[dict] = None   # ★ 追加: プレビュー配置・値
 
 @app.get("/api/admin/review/queue", response_model=List[SubmissionOut])
 def list_review_queue(status: str = Query("pending"), claims=Depends(require_admin)):
@@ -802,6 +924,7 @@ def list_review_queue(status: str = Query("pending"), claims=Depends(require_adm
                    NULLIF(s.company_name, '') AS company_name,
                    s.title,
                    s.created_at,
+                   s.message, s.caption, s.text_color, s.lines, s.overlay,
                    (
                      SELECT sf.path
                        FROM submission_files sf
@@ -819,12 +942,20 @@ def list_review_queue(status: str = Query("pending"), claims=Depends(require_adm
         company = r["company_name"] or r["title"] or ""
         image_url = _file_path_to_url(r["first_path"])
         submitted_at = (r["created_at"] or datetime.utcnow()).isoformat()
+        lines_val = r.get("lines")
+        if not isinstance(lines_val, list):
+            lines_val = None
         out.append(SubmissionOut(
             id=int(r["id"]),
             companyName=company,
             imageUrl=image_url,
             title=r["title"],
-            submittedAt=submitted_at
+            submittedAt=submitted_at,
+            message=r.get("message"),
+            caption=r.get("caption"),
+            lines=lines_val,
+            textColor=r.get("text_color"),
+            overlay=r.get("overlay"),
         ))
     return out
 
@@ -834,7 +965,6 @@ def approve_submission(submission_id: int, claims=Depends(require_admin)):
         row = conn.execute(text("SELECT status FROM submissions WHERE id=:id"), {"id": submission_id}).first()
         if not row:
             raise HTTPException(status_code=404, detail="not found")
-        # 既に確定済みでも上書きは許容（必要ならガード）
         conn.execute(text("""
             UPDATE submissions
                SET status='approved', decided_at=now()

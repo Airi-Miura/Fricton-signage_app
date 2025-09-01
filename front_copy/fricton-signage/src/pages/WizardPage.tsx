@@ -2,6 +2,8 @@
 import { useLocation, Navigate } from "react-router-dom";
 import type { Kind } from "../services/api";
 import TruckPage_R from "./wizard/TruckPage_R";
+import Authenticated from "./wizard/Authenticated";
+import Unauthorized from "./wizard/Unauthorized";
 import RecognizePage from "./wizard/RecognizePage";
 import AdminAccountButton from "./wizard/AdminAccountButton";
 
@@ -18,8 +20,8 @@ export default function Wizard() {
   const Page =
     kind === "認証画面" ? RecognizePage :
     kind === "アドトラック管理" ? TruckPage_R :
-    // kind === "認証"?:
-    // kind === "非認証" ?:
+    kind === "認証" ? Authenticated :
+    kind === "非認証" ? Unauthorized :
     null;
 
   if (!Page) return <Navigate to="/" replace />;

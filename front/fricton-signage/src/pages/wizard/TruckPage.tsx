@@ -591,7 +591,15 @@ export default function TruckPage() {
         throw new Error(detail || txt || `HTTP ${res.status}`);
       }
 
-      alert("申請を受け付けました。\n確認メールを info@fricton.com から送信しました。\n届かない場合は迷惑メールをご確認ください。");
+      // 送信成功時のアラート
+      alert(
+        "申請を受け付けました。\n" +
+        "確認メールを info@fricton.com から送信しました。\n" +
+        "届かない場合は迷惑メールをご確認ください。\n\n" +
+        "認証・非認証の判定には3営業日ほどお時間をいただきます。\n" +
+        "結果はメールでお知らせいたします。"
+      );
+
       setAnchorDate(d => new Date(d));
       setPickedSlots(new Set());
     } catch (err: any) {

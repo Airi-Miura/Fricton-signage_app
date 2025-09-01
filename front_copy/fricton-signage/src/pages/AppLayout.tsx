@@ -95,6 +95,18 @@ export default function AppLayout() {
         >
           アドトラック管理
         </NavLink>
+        <NavLink
+          to="Authenticated" // ルート名の大文字小文字は App.tsx に合わせる
+          style={({ isActive }) => (isActive ? tabActive : tabBase)}
+        >
+          認証済み
+        </NavLink>
+        <NavLink
+          to="Unauthorized" // ルート名の大文字小文字は App.tsx に合わせる
+          style={({ isActive }) => (isActive ? tabActive : tabBase)}
+        >
+          非認証一覧
+        </NavLink>
       </div>
 
       {/* コンテンツ */}

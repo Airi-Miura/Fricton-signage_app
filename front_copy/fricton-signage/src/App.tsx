@@ -1,6 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
 import TruckPage_R from "./pages/wizard/TruckPage_R";
+import Authenticated from "./pages/wizard/Authenticated";
+import Unauthorized from "./pages/wizard/Unauthorized";
 import RecognizePage from "./pages/wizard/RecognizePage";
 import AppLayout_R from "./pages/AppLayout";
 import LoginPage_admin from "./pages/LoginPage_admin";
@@ -33,6 +35,8 @@ export default function App() {
 
           <Route path="truck" element={<TruckPage_R />} />
           <Route path="allpost" element={<RecognizePage/>} />
+          <Route path="Authenticated" element={<Authenticated/>} />
+          <Route path="Unauthorized" element={<Unauthorized/>} />
         </Route>
 
         {/* それ以外はログインへ */}
