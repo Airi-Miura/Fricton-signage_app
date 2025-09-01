@@ -9,13 +9,14 @@ type Submission = {
   imageUrl: string;
   images?: string[];                   // すべての画像URL（任意）
   submittedAt: string;                 // ISO
-  submitterId?: number | string;       // だれが（任意）
-  schedule?: Record<string, string[]>; // YYYY-MM-DD: [HH:MM, ...] どの時間に（任意）
+  submitterId?: number | string;       // だれが
+  submitterEmail?: string;             // メール
+  schedule?: Record<string, string[]>; // YYYY-MM-DD: [HH:MM, ...]
   message?: string;
   caption?: string;
   lines?: string[];
   textColor?: string;
-  overlay?: { values?: OverlayValues };// テンプレ側の文言（任意）
+  overlay?: { values?: OverlayValues }; // テンプレ側の文言（任意）
 };
 
 /** ====== 定数・APIユーティリティ ====== */
@@ -24,7 +25,7 @@ const API_ROOT =
 const TOKEN_KEY = "token" as const;
 const PAGE_LIMIT = 50;
 
-// DOM 依存を避けるため HeadersInit ではなく Record を返す
+// DOM依存を避けるため HeadersInit ではなく Record を返す
 const authHeaders = (): Record<string, string> => {
   if (typeof window === "undefined") return {};
   const t = localStorage.getItem(TOKEN_KEY) ?? sessionStorage.getItem(TOKEN_KEY);
@@ -60,6 +61,29 @@ function normalizeImages(item: Submission): Submission {
     .map((x) => ensureAbsUrl(x)!);
   const imageUrl = ensureAbsUrl(item.imageUrl) || images[0] || "";
   return { ...item, images, imageUrl };
+}
+
+/** --- 送信者ID/メールのキー揺れ吸収 --- */
+function coerceSubmitter(raw: any): { submitterId?: string | number; submitterEmail?: string } {
+  const submitterId =
+    raw.submitterId ??
+    raw.user_id ?? raw.userId ?? raw.username ??
+    raw.requester_id ?? raw.requesterId ?? raw.requester ??
+    raw.user?.id;
+
+  const submitterEmail =
+    raw.submitterEmail ??
+    raw.requester_email ?? raw.requesterEmail ??
+    raw.email ?? raw.user?.email ?? raw.submitter?.email;
+
+  return { submitterId, submitterEmail };
+}
+
+/** --- 1件分を完全正規化 --- */
+function normalizeSubmission(raw: any): Submission {
+  const base = raw as Submission;
+  const { submitterId, submitterEmail } = coerceSubmitter(raw);
+  return normalizeImages({ ...base, submitterId, submitterEmail });
 }
 
 function flattenSchedule(
@@ -139,6 +163,7 @@ function SmartArtItem({ item }: { item: Submission }) {
           />
         ) : null}
       </div>
+
       <div style={{ minWidth: 0 }}>
         <div
           style={{
@@ -154,8 +179,35 @@ function SmartArtItem({ item }: { item: Submission }) {
           <div style={{ fontSize: 12, color: "#6b7280" }}>
             申請: {fmtJP.format(new Date(item.submittedAt))}
           </div>
-          <div style={{ marginLeft: "auto", fontSize: 12, color: "#6b7280" }}>
-            ユーザーID: {item.submitterId ?? "—"}
+
+          {/* 右肩：ユーザーID & メール */}
+          <div
+            style={{
+              marginLeft: "auto",
+              fontSize: 12,
+              color: "#6b7280",
+              display: "flex",
+              gap: 8,
+              flexWrap: "wrap",
+              alignItems: "baseline",
+              justifyContent: "flex-end",
+              maxWidth: "60%",
+            }}
+          >
+            <span>ユーザーID: {item.submitterId ?? "—"}</span>
+            <span style={{ wordBreak: "break-all" }}>
+              メール:{" "}
+              {item.submitterEmail ? (
+                <a
+                  href={`mailto:${item.submitterEmail}`}
+                  style={{ color: "#2563eb", textDecoration: "none" }}
+                >
+                  {item.submitterEmail}
+                </a>
+              ) : (
+                "—"
+              )}
+            </span>
           </div>
         </div>
 
@@ -252,13 +304,13 @@ function AuthenticatedPage() {
       const path = `/api/admin/review/queue?status=approved&page=${p}&limit=${PAGE_LIMIT}`;
       const resp = (await apiGet<PagedResp>(path, signal)) as PagedResp;
 
-      let arr: Submission[] = Array.isArray(resp)
+      let arrRaw: any[] = Array.isArray(resp)
         ? resp
         : Array.isArray(resp.items)
         ? resp.items!
         : [];
 
-      arr = arr.map(normalizeImages);
+      const arr: Submission[] = arrRaw.map(normalizeSubmission);
 
       setItems((prev) => {
         const seen = new Set(prev.map((x) => String(x.id)));
@@ -316,7 +368,8 @@ function AuthenticatedPage() {
         return (
           String(it.submitterId ?? "").toLowerCase().includes(kw) ||
           (it.companyName ?? "").toLowerCase().includes(kw) ||
-          texts.includes(kw)
+          texts.includes(kw) ||
+          (it.submitterEmail ?? "").toLowerCase().includes(kw)
         );
       });
     }
@@ -352,9 +405,9 @@ function AuthenticatedPage() {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="ユーザーID／会社名／文言で検索"
+          placeholder="ユーザーID／会社名／文言／メールで検索"
           style={{
-            width: 260,
+            width: 300,
             border: "1px solid #d1d5db",
             borderRadius: 8,
             padding: "8px 10px",

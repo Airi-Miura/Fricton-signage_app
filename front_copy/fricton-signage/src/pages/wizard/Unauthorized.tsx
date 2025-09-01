@@ -1,5 +1,5 @@
 // src/pages/admin/Unauthorized.tsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 /** ====== 型 ====== */
 type OverlayValues = Record<string, string>;
@@ -10,6 +10,7 @@ type Submission = {
   images?: string[];
   submittedAt: string;
   submitterId?: number | string;
+  submitterEmail?: string;             // ★追加：メール
   schedule?: Record<string, string[]>;
   message?: string;
   caption?: string;
@@ -22,8 +23,9 @@ type Submission = {
 const API_ROOT =
   (import.meta as any)?.env?.VITE_API_ROOT ?? "http://localhost:8000";
 const TOKEN_KEY = "token" as const;
+const PAGE_LIMIT = 50;
 
-// HeadersInit だと DOM lib が無い環境で型エラーになることがあるので Record に
+// DOM 依存を避けるため HeadersInit ではなく Record を返す
 const authHeaders = (): Record<string, string> => {
   if (typeof window === "undefined") return {};
   const t = localStorage.getItem(TOKEN_KEY) ?? sessionStorage.getItem(TOKEN_KEY);
@@ -61,6 +63,29 @@ function normalizeImages(item: Submission): Submission {
   return { ...item, images, imageUrl };
 }
 
+/** --- 送信者ID/メールのキー揺れ吸収 --- */
+function coerceSubmitter(raw: any): { submitterId?: string | number; submitterEmail?: string } {
+  const submitterId =
+    raw.submitterId ??
+    raw.user_id ?? raw.userId ?? raw.username ??
+    raw.requester_id ?? raw.requesterId ?? raw.requester ??
+    raw.user?.id;
+
+  const submitterEmail =
+    raw.submitterEmail ??
+    raw.requester_email ?? raw.requesterEmail ??
+    raw.email ?? raw.user?.email ?? raw.submitter?.email;
+
+  return { submitterId, submitterEmail };
+}
+
+/** --- 1件分を完全正規化 --- */
+function normalizeSubmission(raw: any): Submission {
+  const base = raw as Submission;
+  const { submitterId, submitterEmail } = coerceSubmitter(raw);
+  return normalizeImages({ ...base, submitterId, submitterEmail });
+}
+
 function flattenSchedule(
   schedule?: Record<string, string[]>
 ): { label: string; sortKey: number }[] {
@@ -69,8 +94,7 @@ function flattenSchedule(
   for (const [d, arr] of Object.entries(schedule)) {
     if (!Array.isArray(arr)) continue;
     for (const t of arr) {
-      const dtStr = `${d}T${t}:00+09:00`; // JST として解釈
-      const ts = new Date(dtStr).getTime();
+      const ts = new Date(`${d}T${t}:00+09:00`).getTime(); // JST として解釈
       const mm = new Date(d).getMonth() + 1;
       const dd = new Date(d).getDate();
       out.push({ label: `${mm}/${dd} ${t}`, sortKey: ts });
@@ -154,8 +178,35 @@ function SmartArtItem({ item }: { item: Submission }) {
           <div style={{ fontSize: 12, color: "#6b7280" }}>
             申請: {fmtJP.format(new Date(item.submittedAt))}
           </div>
-          <div style={{ marginLeft: "auto", fontSize: 12, color: "#6b7280" }}>
-            ユーザーID: {item.submitterId ?? "—"}
+
+          {/* 右肩：ユーザーID & メール */}
+          <div
+            style={{
+              marginLeft: "auto",
+              fontSize: 12,
+              color: "#6b7280",
+              display: "flex",
+              gap: 8,
+              flexWrap: "wrap",
+              alignItems: "baseline",
+              justifyContent: "flex-end",
+              maxWidth: "60%",
+            }}
+          >
+            <span>ユーザーID: {item.submitterId ?? "—"}</span>
+            <span style={{ wordBreak: "break-all" }}>
+              メール:{" "}
+              {item.submitterEmail ? (
+                <a
+                  href={`mailto:${item.submitterEmail}`}
+                  style={{ color: "#2563eb", textDecoration: "none" }}
+                >
+                  {item.submitterEmail}
+                </a>
+              ) : (
+                "—"
+              )}
+            </span>
           </div>
         </div>
 
@@ -223,37 +274,90 @@ function SmartArtItem({ item }: { item: Submission }) {
   );
 }
 
+/** ====== ページング対応レスポンス型 ====== */
+type PagedResp =
+  | Submission[]
+  | {
+      ok?: boolean;
+      items?: Submission[];
+      nextPage?: number | null;
+    };
+
 /** ====== ページ本体（非認証一覧） ====== */
 function UnauthorizedPage() {
   const [items, setItems] = useState<Submission[]>([]);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // 任意：検索・並び替え（必要なければ消してOK）
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<"new" | "old">("new");
+
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  const fetchPage = async (p: number, signal?: AbortSignal) => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const path = `/api/admin/review/queue?status=rejected&page=${p}&limit=${PAGE_LIMIT}`;
+      const resp = (await apiGet<PagedResp>(path, signal)) as PagedResp;
+
+      let arrRaw: any[] = Array.isArray(resp)
+        ? resp
+        : Array.isArray(resp.items)
+        ? resp.items!
+        : [];
+
+      const arr: Submission[] = arrRaw.map(normalizeSubmission);
+
+      setItems((prev) => {
+        const seen = new Set(prev.map((x) => String(x.id)));
+        return [...prev, ...arr.filter((x) => !seen.has(String(x.id)))];
+      });
+
+      const nextExplicit =
+        !Array.isArray(resp) && resp.nextPage != null ? resp.nextPage : null;
+      const inferred = arr.length >= PAGE_LIMIT ? p + 1 : null;
+      const next = nextExplicit ?? inferred;
+      setHasMore(next != null);
+      if (next != null) setPage(next);
+    } catch (e: any) {
+      setErr(e?.message || "ロードに失敗しました");
+      setHasMore(false);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // 初回ロード
   useEffect(() => {
     const c = new AbortController();
-    (async () => {
-      setLoading(true);
-      setErr(null);
-      try {
-        const list = await apiGet<Submission[]>(
-          "/api/admin/review/queue?status=rejected",
-          c.signal
-        );
-        setItems((list ?? []).map(normalizeImages));
-      } catch (e: any) {
-        setErr(e?.message || "ロードに失敗しました");
-      } finally {
-        setLoading(false);
-      }
-    })();
+    setItems([]);
+    setPage(1);
+    setHasMore(true);
+    fetchPage(1, c.signal);
     return () => c.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 無限スクロール
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasMore) return;
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((ent) => {
+        if (ent.isIntersecting && !loading) {
+          fetchPage(page);
+        }
+      });
+    });
+    io.observe(el);
+    return () => io.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sentinelRef.current, hasMore, loading, page]);
+
+  // 検索＆並び替え後の配列
   const filtered = useMemo(() => {
     const kw = q.trim().toLowerCase();
     let arr = items;
@@ -263,6 +367,7 @@ function UnauthorizedPage() {
         return (
           String(it.submitterId ?? "").toLowerCase().includes(kw) ||
           (it.companyName ?? "").toLowerCase().includes(kw) ||
+          (it.submitterEmail ?? "").toLowerCase().includes(kw) ||
           texts.includes(kw)
         );
       });
@@ -286,7 +391,7 @@ function UnauthorizedPage() {
         非認証（拒否）となった申請を、過去分まで一覧表示します。
       </div>
 
-      {/* 検索＆並び替え（不要ならこのブロックごと削除OK） */}
+      {/* 検索＆並び替え */}
       <div
         style={{
           display: "flex",
@@ -299,9 +404,9 @@ function UnauthorizedPage() {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="ユーザーID／会社名／文言で検索"
+          placeholder="ユーザーID／会社名／文言／メールで検索"
           style={{
-            width: 260,
+            width: 300,
             border: "1px solid #d1d5db",
             borderRadius: 8,
             padding: "8px 10px",
@@ -357,6 +462,9 @@ function UnauthorizedPage() {
           ))}
         </div>
       )}
+
+      {/* 無限スクロール監視点 */}
+      <div ref={sentinelRef} style={{ height: 12 }} />
     </div>
   );
 }
