@@ -564,6 +564,14 @@ export default function TruckPage() {
         (byDate[d] ??= []).push(t);
       });
 
+      // ★ 追加: 送信する文字色を確定（未設定はテンプレ既定色で補完）
+      const effectiveColors: Record<string, string> = {};
+      currentTpl.textBoxes.forEach(tb => {
+        // textColors[tb.key] は「ユーザが選んだ色」を想定
+        // なければテンプレの既定色、さらに無ければ白
+        effectiveColors[tb.key] = (textColors?.[tb.key]) ?? tb.color ?? "#fff";
+      });
+
       const fd = new FormData();
       fd.append("kind", KIND);
       fd.append("tpl_id", tplId);
@@ -571,6 +579,9 @@ export default function TruckPage() {
       fd.append("schedule", JSON.stringify(byDate));
       imageFiles.forEach(f => fd.append("files_trucks", f));
       if (audioFile) fd.append("audio", audioFile);
+
+      // ★ 追加: 文字色も送る
+      fd.append("text_colors", JSON.stringify(effectiveColors));
 
       const token = localStorage.getItem("token") ?? "";
 

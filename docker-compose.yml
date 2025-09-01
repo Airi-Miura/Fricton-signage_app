@@ -86,6 +86,8 @@ services:
       # ★ 管理者DBの起動も待つ
       admin-db:
         condition: service_healthy
+    volumes:
+      - uploads:/app/uploads
 
 
   front:
@@ -110,3 +112,4 @@ volumes:
   dbdata:
   # ★ 追加：管理者認証DBのデータ永続化
   admin_dbdata:
+  uploads:
