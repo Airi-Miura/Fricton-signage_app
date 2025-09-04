@@ -52,16 +52,6 @@ const apiPost = async (path: string) => {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res;
 };
-/** ★ 追加: JSONを送るPOST（将来のメール通知API用。現行APIは無視してもOK） */
-const apiPostJSON = async (path: string, body: any) => {
-  const res = await fetch(`${API_ROOT}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify(body ?? {}),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res;
-};
 
 /** ★ 追加: overlay を使って文字を重ね描画する小コンポーネント */
 function TextOverlay({
@@ -234,17 +224,11 @@ export default function AdminAuthPage() {
   }, []);
 
   // ========== アクション（認証／非認証） ==========
-  /** ★ 追加: 承認時にメール通知（将来のAPIを想定。現行APIは ?notify=1 を無視してもOK） */
   async function approve(id: string) {
     const item = pending.find(p => p.id === id);
     if (!item) return;
     try {
-      // 任意メッセージ入力（空でも可 / Cancel で空）
-      const note = window.prompt("ユーザーへのメッセージ（任意）を入力してください。\n※この内容が審査結果メールに入ります。", "") ?? "";
-
-      // ★ メール通知フラグ付きで叩く（将来APIで利用）。現行は無視されても200ならOK。
-      await apiPostJSON(`/api/admin/review/${id}/approve?notify=1`, { note });
-
+      await apiPost(`/api/admin/review/${id}/approve`);
       // 楽観的更新：上から外し、下に流す
       setPending(prev => prev.filter(p => p.id !== id));
       setReviewed(prev => [
@@ -258,34 +242,15 @@ export default function AdminAuthPage() {
       });
     } catch (e) {
       console.error(e);
-      // フォールバック：旧API（メール通知未実装）の場合、従来のエンドポイントで再試行
-      try {
-        await apiPost(`/api/admin/review/${id}/approve`);
-        setPending(prev => prev.filter(p => p.id !== id));
-        setReviewed(prev => [
-          { ...item, status: "approved", decidedAt: new Date().toISOString() },
-          ...prev,
-        ]);
-        setSelecting(prev => {
-          const n = new Set(prev);
-          n.delete(id);
-          return n;
-        });
-      } catch (e2) {
-        console.error(e2);
-        alert("承認に失敗しました。");
-      }
+      alert("承認に失敗しました。");
     }
   }
 
-  /** ★ 追加: 非認証時にメール通知（同様に ?notify=1 + 任意メッセージ） */
   async function reject(id: string) {
     const item = pending.find(p => p.id === id);
     if (!item) return;
     try {
-      const note = window.prompt("ユーザーへのメッセージ（任意）を入力してください。\n※この内容が審査結果メールに入ります。", "") ?? "";
-      await apiPostJSON(`/api/admin/review/${id}/reject?notify=1`, { note });
-
+      await apiPost(`/api/admin/review/${id}/reject`);
       setPending(prev => prev.filter(p => p.id !== id));
       setReviewed(prev => [
         { ...item, status: "rejected", decidedAt: new Date().toISOString() },
@@ -298,82 +263,13 @@ export default function AdminAuthPage() {
       });
     } catch (e) {
       console.error(e);
-      // フォールバック（旧API）
-      try {
-        await apiPost(`/api/admin/review/${id}/reject`);
-        setPending(prev => prev.filter(p => p.id !== id));
-        setReviewed(prev => [
-          { ...item, status: "rejected", decidedAt: new Date().toISOString() },
-          ...prev,
-        ]);
-        setSelecting(prev => {
-          const n = new Set(prev);
-          n.delete(id);
-          return n;
-        });
-      } catch (e2) {
-        console.error(e2);
-        alert("非認証に失敗しました。");
-      }
+      alert("非認証に失敗しました。");
     }
   }
 
-  // まとめ操作（任意） — ★ 追加: ひとつのメッセージで一括送信
-  const approveSelected = () => {
-    if (selecting.size === 0) return;
-    const note = window.prompt(`選択(${selecting.size})件を承認します。ユーザーへのメッセージ（任意）:`, "") ?? "";
-    Array.from(selecting).forEach(async (id) => {
-      const item = pending.find(p => p.id === id);
-      if (!item) return;
-      try {
-        await apiPostJSON(`/api/admin/review/${id}/approve?notify=1`, { note });
-        setPending(prev => prev.filter(p => p.id !== id));
-        setReviewed(prev => [{ ...item, status: "approved", decidedAt: new Date().toISOString() }, ...prev]);
-      } catch {
-        try {
-          await apiPost(`/api/admin/review/${id}/approve`);
-          setPending(prev => prev.filter(p => p.id !== id));
-          setReviewed(prev => [{ ...item, status: "approved", decidedAt: new Date().toISOString() }, ...prev]);
-        } catch (e) {
-          console.error(e);
-        }
-      } finally {
-        setSelecting(prev => {
-          const n = new Set(prev);
-          n.delete(id);
-          return n;
-        });
-      }
-    });
-  };
-
-  const rejectSelected = () => {
-    if (selecting.size === 0) return;
-    const note = window.prompt(`選択(${selecting.size})件を非認証にします。ユーザーへのメッセージ（任意）:`, "") ?? "";
-    Array.from(selecting).forEach(async (id) => {
-      const item = pending.find(p => p.id === id);
-      if (!item) return;
-      try {
-        await apiPostJSON(`/api/admin/review/${id}/reject?notify=1`, { note });
-        setPending(prev => prev.filter(p => p.id !== id));
-        setReviewed(prev => [{ ...item, status: "rejected", decidedAt: new Date().toISOString() }, ...prev]);
-      } catch {
-        try {
-          await apiPost(`/api/admin/review/${id}/reject`);
-          setPending(prev => prev.filter(p => p.id !== id));
-          setReviewed(prev => [{ ...item, status: "rejected", decidedAt: new Date().toISOString() }, ...prev]);
-        } catch (e) {
-          console.error(e);
-        }
-      } finally {
-        setSelecting(prev => {
-          const n = new Set(prev);
-          n.delete(id);
-          return n;
-        });
-      }
-    });
-  };
+  // まとめ操作（任意）
+  const approveSelected = () => Array.from(selecting).forEach(approve);
+  const rejectSelected =  () => Array.from(selecting).forEach(reject);
 
   return (
     <div style={{ maxWidth: 1200, margin: "24px auto", padding: 16 }}>

@@ -2,11 +2,11 @@ import os
 import json
 import uuid
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timezone,timedelta
 from pathlib import Path
-from typing import List, Optional, Dict, Tuple, Any
+from typing import List, Optional, Dict, Tuple
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Header, Query, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, EmailStr
@@ -14,7 +14,6 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from passlib.context import CryptContext
 from jose import jwt, JWTError
-import re
 
 # -----------------------------
 # アプリDB（業務データ＋一般ユーザー）
@@ -36,7 +35,7 @@ ADMIN_AUTH_DATABASE_URL = os.getenv("ADMIN_AUTH_DATABASE_URL", DATABASE_URL)
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "./uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-API_ORIGIN = os.getenv("API_ORIGIN", "http://localhost:8000")
+API_ORIGIN = os.getenv("API_ORIGIN", "*")
 JWT_SECRET = os.getenv("JWT_SECRET", "dev-change-me")  # 本番は強い値に
 JWT_ALG = os.getenv("JWT_ALG", "HS256")
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))  # 24h
@@ -63,6 +62,7 @@ engine_admin = create_engine(ADMIN_AUTH_DATABASE_URL, pool_pre_ping=True)
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 app = FastAPI(title="fricsignage API")
+
 
 # ---- 簡易メールヘルパ ----
 def send_mail(to_addr: str, subject: str, body: str) -> None:
@@ -199,8 +199,13 @@ def init_app_db_with_retry():
           ) THEN
             ALTER TABLE submissions ADD COLUMN company_name TEXT NOT NULL DEFAULT '';
           END IF;
+        END $$;
+        """))
 
-          -- ★ ユーザー文言・色・行
+        # ★ 追加: ユーザー文言を保存するカラム群（存在しなければ追加）
+        conn.execute(text("""
+        DO $$
+        BEGIN
           IF NOT EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_name='submissions' AND column_name='message'
@@ -222,14 +227,6 @@ def init_app_db_with_retry():
             ALTER TABLE submissions ADD COLUMN text_color TEXT NULL;
           END IF;
 
-          -- ★ 追加: テキスト色マップ（複数テキストボックス対応）
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='submissions' AND column_name='text_colors'
-          ) THEN
-            ALTER TABLE submissions ADD COLUMN text_colors JSONB NULL;
-          END IF;
-
           IF NOT EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_name='submissions' AND column_name='lines'
@@ -237,27 +234,12 @@ def init_app_db_with_retry():
             ALTER TABLE submissions ADD COLUMN lines JSONB NULL;
           END IF;
 
-          -- ★ プレビュー配置・スタイル
+          -- ★ 追加: プレビュー配置・スタイルを丸ごと持つ
           IF NOT EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_name='submissions' AND column_name='overlay'
           ) THEN
             ALTER TABLE submissions ADD COLUMN overlay JSONB NULL;
-          END IF;
-
-          -- ★ 申請者ひも付け（審査結果メール用）
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='submissions' AND column_name='requester_user_id'
-          ) THEN
-            ALTER TABLE submissions ADD COLUMN requester_user_id BIGINT NULL;
-          END IF;
-
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='submissions' AND column_name='requester_email'
-          ) THEN
-            ALTER TABLE submissions ADD COLUMN requester_email TEXT NULL;
           END IF;
         END $$;
         """))
@@ -340,13 +322,7 @@ def on_startup():
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3002",
-        "http://127.0.0.1:3002",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+        "*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -448,22 +424,53 @@ def create_access_token(*, sub: str, username: str, role: str) -> str:
 def require_admin(authorization: str = Header(None)):
     """管理API用：admin_users（管理認証DB）で有効性を確認"""
     if not authorization or not authorization.lower().startswith("bearer "):
+        print("tokenなし")
         raise HTTPException(status_code=401, detail="missing bearer token")
-    token = authorization.split(" ", 1)[1]
+
+    # 1) ヘッダからトークン本体を取り出す
+    token = authorization.split(" ", 1)[1].strip()
+
+    # （任意）変な制御文字が混ざっていたら 401 にする
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in token):
+        raise HTTPException(status_code=401, detail="invalid token format")
+
+    # 2) 署名検証なしで exp をログに出したい場合だけ unverified claims を使う
+    try:
+        print("try一個目")
+        payload_unverified = jwt.get_unverified_claims(token)
+        exp = payload_unverified.get("exp")
+        if isinstance(exp, (int, float)):
+            print("exp=", exp, "->", datetime.fromtimestamp(exp, tz=timezone.utc))
+    except Exception as e:
+        print("get_unverified_claims failed:", e)
+
+    # 3) 正式に検証（署名・exp）して claims を得る
     try:
         claims = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
-    except JWTError:
+    except JWTError as e:
+        print("jwt decode error:", e)
         raise HTTPException(status_code=401, detail="invalid token")
+
+    # 4) 権限チェック
     if claims.get("role") != "admin":
         raise HTTPException(status_code=403, detail="not allowed")
 
+    # 5) アカウント有効性チェック（admin_users）
     uid = claims.get("sub")
+    if uid is None:
+        raise HTTPException(status_code=401, detail="invalid token")
+
     with engine_admin.begin() as conn:
-        row = conn.execute(text("SELECT is_active FROM admin_users WHERE id=:id"), {"id": int(uid)}).first()
+        row = conn.execute(
+            text("SELECT is_active FROM admin_users WHERE id=:id"),
+            {"id": int(uid)}
+        ).first()
         if not row or not row[0]:
             raise HTTPException(status_code=403, detail="inactive user")
+
     return claims
 
+    
 # ★ 一般ユーザー（任意）: Authorization があればユーザーを引く（無ければ None）
 def try_get_user_from_auth(authorization: Optional[str]) -> Optional[Dict]:
     if not authorization or not authorization.lower().startswith("bearer "):
@@ -520,7 +527,6 @@ def admin_login(p: LoginIn):
     if not pwd_ctx.verify(p.password, row["password_hash"]):
         raise HTTPException(status_code=401, detail="invalid credentials")
     if not row["is_active"]:
-        # 既存のtypoを修正：status_code
         raise HTTPException(status_code=403, detail="inactive user")
 
     token = create_access_token(sub=str(row["id"]), username=row["username"], role="admin")
@@ -602,28 +608,6 @@ async def _save_files_for_submission(conn, submission_id: int, files: Optional[L
         saved_paths.append(str(dest))
     return saved_paths
 
-# ★ HEXカラーの簡易検証（#RGB / #RRGGBB）
-HEX_COLOR_RE = re.compile(r"^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$")
-
-def _parse_text_colors(value: Optional[str]) -> Optional[Dict[str, str]]:
-    if not value:
-        return None
-    try:
-        obj = json.loads(value)
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid text_colors JSON")
-    if not isinstance(obj, dict):
-        raise HTTPException(status_code=400, detail="text_colors must be an object")
-    out: Dict[str, str] = {}
-    for k, v in obj.items():
-        if not isinstance(k, str) or not isinstance(v, str):
-            raise HTTPException(status_code=400, detail="text_colors values must be strings")
-        v2 = v.strip()
-        if not HEX_COLOR_RE.match(v2):
-            raise HTTPException(status_code=400, detail=f"invalid color: {v2}")
-        out[k] = v2.lower()
-    return out
-
 # --- trucks ---
 @app.post("/api/trucks")
 async def create_trucks(
@@ -636,9 +620,7 @@ async def create_trucks(
     message: Optional[str] = Form(None),
     caption: Optional[str] = Form(None),
     text_color: Optional[str] = Form(None),
-    textColor: Optional[str] = Form(None),                   # camelCaseも受ける（単色）
-    text_colors: Optional[str] = Form(None),                 # ★ 追加：複数色（JSON文字列）
-    textColors: Optional[str] = Form(None),                  # ★ 追加：camelCase
+    textColor: Optional[str] = Form(None),                   # camelCaseも受ける
     lines: Optional[str] = Form(None),
     words: Optional[str] = Form(None),                       # 互換：別名を吸収
     overlay: Optional[str] = Form(None),                     # プレビュー設定(JSON文字列)
@@ -650,9 +632,6 @@ async def create_trucks(
     if not lines and words:
         lines = words
     color_value = text_color or textColor
-
-    # ★ 追加：複数色パース
-    color_map = _parse_text_colors(text_colors or textColors)
 
     if lines:
         try:
@@ -687,25 +666,16 @@ async def create_trucks(
     except Exception:
         raise HTTPException(status_code=400, detail="invalid schedule JSON")
 
-    # 申請者情報（任意）
-    requester = try_get_user_from_auth(authorization)
-    requester_user_id = requester["id"] if requester else None
-    requester_email = requester.get("email") if requester else None
-
     saved_paths: List[str] = []
-    incoming_files: List[UploadFile] = files_trucks or files_truck or []
-
     with engine.begin() as conn:
         sub_id = conn.execute(
             text("""
                 INSERT INTO submissions(
                     kind, title, schedule_json,
-                    company_name, message, caption, text_color, text_colors, lines, overlay,
-                    requester_user_id, requester_email
+                    company_name, message, caption, text_color, lines, overlay
                 )
                 VALUES (:k, :t, CAST(:s AS JSONB),
-                        :company, :msg, :cap, :color, CAST(:colors AS JSONB), CAST(:lines AS JSONB), CAST(:overlay AS JSONB),
-                        :ruid, :remail)
+                        :company, :msg, :cap, :color, CAST(:lines AS JSONB), CAST(:overlay AS JSONB))
                 RETURNING id
             """),
             {
@@ -716,16 +686,15 @@ async def create_trucks(
                 "msg": message,
                 "cap": caption,
                 "color": color_value,
-                "colors": json.dumps(color_map) if color_map is not None else None,
                 "lines": json.dumps(lines_list) if lines_list is not None else None,
                 "overlay": json.dumps(overlay_obj) if overlay_obj is not None else None,
-                "ruid": requester_user_id,
-                "remail": requester_email,
             },
         ).scalar_one()
 
         _insert_slots(conn, kind, sub_id, sched)
 
+        # ファイル名の揺れを吸収
+        incoming_files = files_trucks or files_truck or []
         saved_paths = await _save_files_for_submission(conn, sub_id, incoming_files)
 
         # 音声も保存（あれば）
@@ -733,7 +702,8 @@ async def create_trucks(
             saved_paths += await _save_files_for_submission(conn, sub_id, [audio])
 
     # 申請受付メール（任意）
-    if requester_email:
+    user = try_get_user_from_auth(authorization)
+    if user and user.get("email"):
         images_cnt = len(incoming_files)
         audio_txt = "あり" if audio else "なし"
         try:
@@ -749,7 +719,7 @@ async def create_trucks(
             sched_summary = "-"
         subject = "【申請完了】アドトラックの申請を受け付けました"
         body = (
-            f"{(requester.get('name') if requester else '') or ''} 様\n\n"
+            f"{user.get('name') or user['username']} 様\n\n"
             "アドトラックの申請を受け付けました。\n\n"
             "— 申請概要 —\n"
             f"・画像：{images_cnt} 枚\n"
@@ -758,7 +728,7 @@ async def create_trucks(
             "本メールは送信専用です。お心当たりがない場合は破棄してください。"
         )
         try:
-            send_mail(requester_email, subject, body)
+            send_mail(user["email"], subject, body)
         except Exception:
             pass
 
@@ -776,13 +746,10 @@ async def create_bulk(
     caption: Optional[str] = Form(None),
     text_color: Optional[str] = Form(None),
     textColor: Optional[str] = Form(None),
-    text_colors: Optional[str] = Form(None),          # ★ 追加
-    textColors: Optional[str] = Form(None),           # ★ 追加 camelCase
     lines: Optional[str] = Form(None),
     words: Optional[str] = Form(None),
     overlay: Optional[str] = Form(None),
     company_name: str = Form(""),
-    authorization: Optional[str] = Header(None),       # ★ 申請者も残せるように
 ):
     # スケジュール検証
     try:
@@ -800,7 +767,6 @@ async def create_bulk(
     if not lines and words:
         lines = words
     color_value = text_color or textColor
-    color_map = _parse_text_colors(text_colors or textColors)
 
     if lines:
         try:
@@ -818,10 +784,6 @@ async def create_bulk(
         except Exception:
             overlay_obj = None
 
-    requester = try_get_user_from_auth(authorization)
-    requester_user_id = requester["id"] if requester else None
-    requester_email = requester.get("email") if requester else None
-
     result = {"truck": {"submission_id": None, "files": []}}
 
     with engine.begin() as conn:
@@ -829,12 +791,10 @@ async def create_bulk(
             text("""
                 INSERT INTO submissions(
                     kind, title, schedule_json,
-                    company_name, message, caption, text_color, text_colors, lines, overlay,
-                    requester_user_id, requester_email
+                    company_name, message, caption, text_color, lines, overlay
                 )
                 VALUES (:k, :t, CAST(:s AS JSONB),
-                        :company, :msg, :cap, :color, CAST(:colors AS JSONB), CAST(:lines AS JSONB), CAST(:overlay AS JSONB),
-                        :ruid, :remail)
+                        :company, :msg, :cap, :color, CAST(:lines AS JSONB), CAST(:overlay AS JSONB))
                 RETURNING id
             """),
             {
@@ -845,11 +805,8 @@ async def create_bulk(
                 "msg": message,
                 "cap": caption,
                 "color": color_value,
-                "colors": json.dumps(color_map) if color_map is not None else None,
                 "lines": json.dumps(lines_list) if lines_list is not None else None,
                 "overlay": json.dumps(overlay_obj) if overlay_obj is not None else None,
-                "ruid": requester_user_id,
-                "remail": requester_email,
             },
         ).scalar_one()
 
@@ -908,7 +865,7 @@ class AdminMeOut(BaseModel):
 class AdminPwChangeIn(BaseModel):
     current_password: str = Field(..., min_length=1)
     new_password: str = Field(..., min_length=6, max_length=128)
-
+ 
 class AdminRenameIn(BaseModel):
     current_password: str = Field(..., min_length=1)
     new_username: str = Field(..., min_length=3, max_length=64)
@@ -979,12 +936,8 @@ class SubmissionOut(BaseModel):
     message: Optional[str] = None
     caption: Optional[str] = None
     lines: Optional[List[str]] = None
-    textColor: Optional[str] = None               # 後方互換（単色）
-    textColors: Optional[Dict[str, str]] = None   # ★ 追加（複数）
-    overlay: Optional[dict] = None
-    # ★ 追加: 申請者・スケジュール
-    userId: Optional[int] = None
-    schedule: Optional[Dict[str, List[str]]] = None
+    textColor: Optional[str] = None
+    overlay: Optional[dict] = None   # ★ 追加: プレビュー配置・値
 
 @app.get("/api/admin/review/queue", response_model=List[SubmissionOut])
 def list_review_queue(status: str = Query("pending"), claims=Depends(require_admin)):
@@ -997,8 +950,7 @@ def list_review_queue(status: str = Query("pending"), claims=Depends(require_adm
                    NULLIF(s.company_name, '') AS company_name,
                    s.title,
                    s.created_at,
-                   s.message, s.caption, s.text_color, s.text_colors, s.lines, s.overlay,
-                   s.requester_user_id, s.schedule_json,
+                   s.message, s.caption, s.text_color, s.lines, s.overlay,
                    (
                      SELECT sf.path
                        FROM submission_files sf
@@ -1019,13 +971,6 @@ def list_review_queue(status: str = Query("pending"), claims=Depends(require_adm
         lines_val = r.get("lines")
         if not isinstance(lines_val, list):
             lines_val = None
-        schedule_val = r.get("schedule_json")
-        if not isinstance(schedule_val, dict):
-            schedule_val = None
-        colors_val = r.get("text_colors")
-        if not isinstance(colors_val, dict):
-            colors_val = None
-
         out.append(SubmissionOut(
             id=int(r["id"]),
             companyName=company,
@@ -1036,75 +981,12 @@ def list_review_queue(status: str = Query("pending"), claims=Depends(require_adm
             caption=r.get("caption"),
             lines=lines_val,
             textColor=r.get("text_color"),
-            textColors=colors_val,
             overlay=r.get("overlay"),
-            userId=(int(r["requester_user_id"]) if r.get("requester_user_id") is not None else None),
-            schedule=schedule_val,
         ))
     return out
 
-# ---- 審査結果メールの本文ヘルパ ----
-def _format_schedule_for_mail(sched: Optional[dict]) -> str:
-    if not isinstance(sched, dict):
-        return "-"
-    parts: List[str] = []
-    for d, arr in sched.items():
-        if not isinstance(arr, list) or not arr:
-            continue
-        try:
-            dt = datetime.strptime(d, "%Y-%m-%d").date()
-            day = f"{dt.month}/{dt.day}"
-        except Exception:
-            day = d
-        parts.append(f"{day} " + ", ".join([str(x) for x in arr]))
-    return "\n".join(parts) if parts else "-"
-
-def _notify_decision(conn, submission_id: int, approved: bool, note: str = "") -> None:
-    # 宛先は submissions.requester_email → なければ users.email
-    row = conn.execute(text("""
-        SELECT s.requester_email, s.requester_user_id, s.schedule_json, s.title, s.company_name
-          FROM submissions s
-         WHERE s.id=:id
-    """), {"id": submission_id}).mappings().first()
-    if not row:
-        return
-    to_addr = row.get("requester_email")
-
-    if not to_addr and row.get("requester_user_id"):
-        u = conn.execute(text("SELECT email, display_name, username FROM users WHERE id=:id"),
-                         {"id": int(row["requester_user_id"])}).mappings().first()
-        if u:
-            to_addr = u.get("email")
-            display = u.get("display_name") or u.get("username") or ""
-        else:
-            display = ""
-    else:
-        display = ""
-
-    if not to_addr:
-        return  # 送れない
-
-    sched_summary = _format_schedule_for_mail(row.get("schedule_json"))
-    company = row.get("company_name") or row.get("title") or ""
-
-    subject = "【審査結果】アドトラック申請が承認されました" if approved else "【審査結果】アドトラック申請は非承認でした"
-    body = (
-        f"{display} 様\n\n"
-        f"「{company}」の申請について、審査結果をお知らせします。\n\n"
-        f"結果：{'承認' if approved else '非承認'}\n"
-        f"申請日程：\n{sched_summary}\n"
-    )
-    if note:
-        body += f"\n— メッセージ —\n{note}\n"
-    body += "\n本メールは送信専用です。ご不明点は担当者までご連絡ください。"
-
-    try:
-        send_mail(to_addr, subject, body)
-    except Exception:
-        pass
-
 @app.post("/api/admin/review/{submission_id}/approve")
-async def approve_submission(submission_id: int, request: Request, notify: int = Query(0), claims=Depends(require_admin)):
+def approve_submission(submission_id: int, claims=Depends(require_admin)):
     with engine.begin() as conn:
         row = conn.execute(text("SELECT status FROM submissions WHERE id=:id"), {"id": submission_id}).first()
         if not row:
@@ -1114,23 +996,10 @@ async def approve_submission(submission_id: int, request: Request, notify: int =
                SET status='approved', decided_at=now()
              WHERE id=:id
         """), {"id": submission_id})
-
-        # ★ notify=1 のとき審査結果メール送信（任意メッセージ同梱）
-        if notify:
-            note = ""
-            try:
-                payload = await request.json()
-                if isinstance(payload, dict):
-                    n = payload.get("note")
-                    if isinstance(n, str):
-                        note = n.strip()
-            except Exception:
-                pass
-            _notify_decision(conn, submission_id, approved=True, note=note)
     return {"ok": True}
 
 @app.post("/api/admin/review/{submission_id}/reject")
-async def reject_submission(submission_id: int, request: Request, notify: int = Query(0), claims=Depends(require_admin)):
+def reject_submission(submission_id: int, claims=Depends(require_admin)):
     with engine.begin() as conn:
         row = conn.execute(text("SELECT status FROM submissions WHERE id=:id"), {"id": submission_id}).first()
         if not row:
@@ -1140,17 +1009,4 @@ async def reject_submission(submission_id: int, request: Request, notify: int = 
                SET status='rejected', decided_at=now()
              WHERE id=:id
         """), {"id": submission_id})
-
-        # ★ notify=1 のとき審査結果メール送信
-        if notify:
-            note = ""
-            try:
-                payload = await request.json()
-                if isinstance(payload, dict):
-                    n = payload.get("note")
-                    if isinstance(n, str):
-                        note = n.strip()
-            except Exception:
-                pass
-            _notify_decision(conn, submission_id, approved=False, note=note)
     return {"ok": True}

@@ -55,7 +55,7 @@ export default function TruckPage_R() {
     const qs = new URLSearchParams({
       start: toISODate(start),
       end: toISODate(end),
-      kind: "トラック",
+      kind: "アドトラック",
     });
 
     const ctrl = new AbortController();

@@ -1,5 +1,7 @@
 // src/pages/admin/Authenticated.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
+import { resolveSubmittersByImages, resolveUsersByIds, type SubmitterLite } from "../../lib/submitter-resolver";
+
 
 /** ====== 型 ====== */
 type OverlayValues = Record<string, string>;
@@ -7,30 +9,43 @@ type Submission = {
   id: number | string;
   companyName: string;
   imageUrl: string;
-  images?: string[];                   // すべての画像URL（任意）
-  submittedAt: string;                 // ISO
-  submitterId?: number | string;       // だれが
-  submitterEmail?: string;             // メール
-  schedule?: Record<string, string[]>; // YYYY-MM-DD: [HH:MM, ...]
+  images?: string[];
+  submittedAt: string;
+  submitterId?: number | string;
+  submitterEmail?: string;
+  submitterName?: string;
+  schedule?: Record<string, string[]>;
   message?: string;
   caption?: string;
   lines?: string[];
   textColor?: string;
-  overlay?: { values?: OverlayValues }; // テンプレ側の文言（任意）
+  overlay?: { values?: OverlayValues };
 };
 
 /** ====== 定数・APIユーティリティ ====== */
-const API_ROOT =
-  (import.meta as any)?.env?.VITE_API_ROOT ?? "http://localhost:8000";
-const TOKEN_KEY = "token" as const;
+const API_ROOT = (import.meta as any)?.env?.VITE_API_ROOT ?? "http://localhost:8000";
+const TOKEN_KEY = "user" as const;
 const PAGE_LIMIT = 50;
 
-// DOM依存を避けるため HeadersInit ではなく Record を返す
+// DOM 依存のない素直なヘッダ
 const authHeaders = (): Record<string, string> => {
   if (typeof window === "undefined") return {};
-  const t = localStorage.getItem(TOKEN_KEY) ?? sessionStorage.getItem(TOKEN_KEY);
-  return t ? { Authorization: `Bearer ${t}` } : {};
+
+  // localStorage か sessionStorage から取り出す
+  const raw = localStorage.getItem(TOKEN_KEY) ?? sessionStorage.getItem(TOKEN_KEY);
+  if (!raw) return {};
+
+  try {
+    // JSON文字列をオブジェクトに変換
+    const json_object = JSON.parse(raw);
+    const t = json_object.token;
+    return t ? { Authorization: `Bearer ${t}` } : {};
+  } catch (e) {
+    console.error("トークンのJSONパースに失敗しました:", e);
+    return {};
+  }
 };
+
 
 async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${API_ROOT}${path}`, {
@@ -43,59 +58,62 @@ async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
 }
 
 /** ====== ユーティリティ ====== */
-const fmtJP = new Intl.DateTimeFormat("ja-JP", {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
+const fmtJP = new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeStyle: "short" });
 
 function ensureAbsUrl(u?: string) {
   if (!u) return u;
   if (/^https?:\/\//i.test(u)) return u;
-  if (u.startsWith("/")) return `${API_ROOT}${u}`; // /files/... など
+  if (u.startsWith("/")) return `${API_ROOT}${u}`;
   return `${API_ROOT.replace(/\/$/, "")}/${u}`;
 }
 
 function normalizeImages(item: Submission): Submission {
-  const images = (item.images ?? [])
-    .filter(Boolean)
-    .map((x) => ensureAbsUrl(x)!);
+  const images = (item.images ?? []).filter(Boolean).map((x) => ensureAbsUrl(x)!);
   const imageUrl = ensureAbsUrl(item.imageUrl) || images[0] || "";
   return { ...item, images, imageUrl };
 }
 
-/** --- 送信者ID/メールのキー揺れ吸収 --- */
-function coerceSubmitter(raw: any): { submitterId?: string | number; submitterEmail?: string } {
+/** --- 送信者のキー揺れを最大限拾う --- */
+function coerceSubmitter(raw: any): {
+  submitterId?: string | number;
+  submitterEmail?: string;
+  submitterName?: string;
+} {
+  // サーバが expand=submitter で返す/返さない、別名などに対応
+  const s =
+    raw.submitter ?? raw.user ?? raw.owner ?? raw.account ??
+    raw.createdBy ?? raw.created_by ?? raw.creator ?? raw.applicant;
+
   const submitterId =
-    raw.submitterId ??
-    raw.user_id ?? raw.userId ?? raw.username ??
+    raw.submitterId ?? raw.user_id ?? raw.userId ?? raw.username ??
     raw.requester_id ?? raw.requesterId ?? raw.requester ??
-    raw.user?.id;
+    s?.id ?? s?._id ?? s?.user_id;
 
   const submitterEmail =
-    raw.submitterEmail ??
-    raw.requester_email ?? raw.requesterEmail ??
-    raw.email ?? raw.user?.email ?? raw.submitter?.email;
+    raw.submitterEmail ?? raw.requester_email ?? raw.requesterEmail ??
+    raw.email ?? raw.emailAddress ?? s?.email ?? s?.mail ?? s?.email_address;
 
-  return { submitterId, submitterEmail };
+  const submitterName =
+    raw.submitterName ?? raw.requester_name ?? raw.requesterName ??
+    s?.name ?? s?.fullName ?? s?.displayName ?? s?.username;
+
+  return { submitterId, submitterEmail, submitterName };
 }
 
-/** --- 1件分を完全正規化 --- */
+/** --- 1件分の完全正規化（画像URL＋送信者情報） --- */
 function normalizeSubmission(raw: any): Submission {
-  const base = raw as Submission;
-  const { submitterId, submitterEmail } = coerceSubmitter(raw);
-  return normalizeImages({ ...base, submitterId, submitterEmail });
+  const img = normalizeImages(raw as Submission);
+  const who = coerceSubmitter(raw);
+  return { ...img, ...who };
 }
 
-function flattenSchedule(
-  schedule?: Record<string, string[]>
-): { label: string; sortKey: number }[] {
+function flattenSchedule(schedule?: Record<string, string[]>): { label: string; sortKey: number }[] {
   if (!schedule) return [];
   const out: { label: string; sortKey: number }[] = [];
   for (const [d, arr] of Object.entries(schedule)) {
     if (!Array.isArray(arr)) continue;
     for (const t of arr) {
-      // d: YYYY-MM-DD, t: HH:mm を JST(+09:00)として解釈
-      const ts = new Date(`${d}T${t}:00+09:00`).getTime();
+      const ts = new Date(`${d}T${t}:00+09:00`).getTime(); // JST として解釈
       const mm = new Date(d).getMonth() + 1;
       const dd = new Date(d).getDate();
       out.push({ label: `${mm}/${dd} ${t}`, sortKey: ts });
@@ -107,15 +125,14 @@ function flattenSchedule(
 function extractTexts(it: Submission): string[] {
   const vals: string[] = [];
   const v = it.overlay?.values || {};
-  const keys = ["title", "subtitle", "body", "footer"];
-  keys.forEach((k) => {
+  for (const k of ["title", "subtitle", "body", "footer"]) {
     const s = (v[k] ?? "").trim();
     if (s) vals.push(s);
-  });
+  }
   if (vals.length === 0) {
     if (it.message) vals.push(it.message);
     if (it.caption) vals.push(it.caption);
-    if (it.lines && it.lines.length) vals.push(...it.lines);
+    if (it.lines?.length) vals.push(...it.lines);
   }
   return vals
     .flatMap((x) => String(x ?? "").split(/\r?\n/))
@@ -124,7 +141,17 @@ function extractTexts(it: Submission): string[] {
     .slice(0, 8);
 }
 
-/** ====== SmartArt風（縦方向画像リスト）アイテム ====== */
+function mergeSubmitter(dst: Submission, src?: SubmitterLite): Submission {
+  if (!src) return dst;
+  return {
+    ...dst,
+    submitterId: dst.submitterId ?? src.id,
+    submitterEmail: dst.submitterEmail ?? src.email,
+    submitterName: dst.submitterName ?? src.name,
+  };
+}
+
+/** ====== SmartArtカード ====== */
 function SmartArtItem({ item }: { item: Submission }) {
   const texts = extractTexts(item);
   const chips = flattenSchedule(item.schedule);
@@ -180,7 +207,7 @@ function SmartArtItem({ item }: { item: Submission }) {
             申請: {fmtJP.format(new Date(item.submittedAt))}
           </div>
 
-          {/* 右肩：ユーザーID & メール */}
+          {/* 右肩：申請者名／ユーザーID／メール */}
           <div
             style={{
               marginLeft: "auto",
@@ -194,6 +221,7 @@ function SmartArtItem({ item }: { item: Submission }) {
               maxWidth: "60%",
             }}
           >
+            <span>申請者: {item.submitterName ?? "—"}</span>
             <span>ユーザーID: {item.submitterId ?? "—"}</span>
             <span style={{ wordBreak: "break-all" }}>
               メール:{" "}
@@ -249,27 +277,6 @@ function SmartArtItem({ item }: { item: Submission }) {
             ))
           )}
         </div>
-
-        {item.images && item.images.length > 1 && (
-          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-            {item.images.slice(1, 8).map((u, i) => (
-              <img
-                key={i}
-                src={u}
-                alt={`thumb-${i}`}
-                style={{
-                  width: 56,
-                  height: 56,
-                  objectFit: "cover",
-                  borderRadius: 8,
-                  border: "1px solid #e5e7eb",
-                }}
-                loading="lazy"
-                draggable={false}
-              />
-            ))}
-          </div>
-        )}
       </div>
     </article>
   );
@@ -284,7 +291,7 @@ type PagedResp =
       nextPage?: number | null;
     };
 
-/** ====== ページ本体（承認済み） ====== */
+/** ====== 本体 ====== */
 function AuthenticatedPage() {
   const [items, setItems] = useState<Submission[]>([]);
   const [page, setPage] = useState(1);
@@ -294,31 +301,66 @@ function AuthenticatedPage() {
 
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<"new" | "old">("new");
-
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   const fetchPage = async (p: number, signal?: AbortSignal) => {
     setLoading(true);
     setErr(null);
     try {
-      const path = `/api/admin/review/queue?status=approved&page=${p}&limit=${PAGE_LIMIT}`;
+      // expand=submitter を付与（無視されてもOK）
+      const path = `/api/admin/review/queue?status=approved&expand=submitter&page=${p}&limit=${PAGE_LIMIT}`;
       const resp = (await apiGet<PagedResp>(path, signal)) as PagedResp;
 
-      let arrRaw: any[] = Array.isArray(resp)
-        ? resp
-        : Array.isArray(resp.items)
-        ? resp.items!
-        : [];
+      let arrRaw: any[] = Array.isArray(resp) ? resp : Array.isArray(resp.items) ? resp.items! : [];
+      let arr: Submission[] = arrRaw.map(normalizeSubmission);
 
-      const arr: Submission[] = arrRaw.map(normalizeSubmission);
+      // ↓ 送信者が未解決のものだけ、画像→送信者をまとめて解決
+      const need = arr
+        .filter((x) => !x.submitterId && !x.submitterEmail && !x.submitterName)
+        .map((x) => ({
+          submissionId: x.id,
+          imageUrls: [x.imageUrl, ...(x.images ?? [])].filter(Boolean) as string[],
+        }));
+
+        // fetchPage 内（画像→送信者の解決が終わった直後）に追加
+        // ---- ここから 追加 ----
+        const needIds = Array.from(
+          new Set(
+            arr
+              .filter((x) => x.submitterId && (!x.submitterName || !x.submitterEmail))
+              .map((x) => String(x.submitterId))
+          )
+        );
+
+        if (needIds.length) {
+          const userMap = await resolveUsersByIds(needIds, signal);
+          if (import.meta.env?.DEV) {
+            // eslint-disable-next-line no-console
+            console.debug("[resolver(ids)] need", needIds, "got", userMap);
+          }
+          // submitterId をキーにマージ
+          const byId: Record<string, SubmitterLite> = userMap;
+          arr = arr.map((x) => {
+            const m = byId[String(x.submitterId ?? "")];
+            return m ? { ...x, submitterName: x.submitterName ?? m.name, submitterEmail: x.submitterEmail ?? m.email } : x;
+          });
+        }
+
+      if (need.length) {
+        const map = await resolveSubmittersByImages(need, signal);
+        if (import.meta.env?.DEV) {
+          // eslint-disable-next-line no-console
+          console.debug("[resolver] need", need, "got", map);
+        }
+        arr = arr.map((x) => mergeSubmitter(x, map[String(x.id)]));
+      }
 
       setItems((prev) => {
         const seen = new Set(prev.map((x) => String(x.id)));
         return [...prev, ...arr.filter((x) => !seen.has(String(x.id)))];
       });
 
-      const nextExplicit =
-        !Array.isArray(resp) && resp.nextPage != null ? resp.nextPage : null;
+      const nextExplicit = !Array.isArray(resp) && resp.nextPage != null ? resp.nextPage : null;
       const inferred = arr.length >= PAGE_LIMIT ? p + 1 : null;
       const next = nextExplicit ?? inferred;
       setHasMore(next != null);
@@ -366,18 +408,19 @@ function AuthenticatedPage() {
       arr = arr.filter((it) => {
         const texts = extractTexts(it).join("\n").toLowerCase();
         return (
+          (it.submitterName ?? "").toLowerCase().includes(kw) ||
           String(it.submitterId ?? "").toLowerCase().includes(kw) ||
+          (it.submitterEmail ?? "").toLowerCase().includes(kw) ||
           (it.companyName ?? "").toLowerCase().includes(kw) ||
-          texts.includes(kw) ||
-          (it.submitterEmail ?? "").toLowerCase().includes(kw)
+          texts.includes(kw)
         );
       });
     }
-    return [...arr].sort((a, b) => {
-      const ta = new Date(a.submittedAt).getTime();
-      const tb = new Date(b.submittedAt).getTime();
-      return sort === "new" ? tb - ta : ta - tb;
-    });
+    return [...arr].sort((a, b) =>
+      sort === "new"
+        ? new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
+        : new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime()
+    );
   }, [items, q, sort]);
 
   const total = filtered.length;
@@ -388,11 +431,7 @@ function AuthenticatedPage() {
         承認一覧（{total}
         {loading ? " 読み込み中…" : ""}）
       </h2>
-      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 12 }}>
-        承認された申請を、過去分まで一覧表示します。
-      </div>
 
-      {/* 検索＆並び替え */}
       <div
         style={{
           display: "flex",
@@ -405,9 +444,9 @@ function AuthenticatedPage() {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="ユーザーID／会社名／文言／メールで検索"
+          placeholder="申請者名／ユーザーID／会社名／文言／メールで検索"
           style={{
-            width: 300,
+            width: 360,
             border: "1px solid #d1d5db",
             borderRadius: 8,
             padding: "8px 10px",
