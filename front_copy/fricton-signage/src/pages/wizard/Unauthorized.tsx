@@ -24,14 +24,28 @@ type Submission = {
 
 /** ====== 定数・APIユーティリティ ====== */
 const API_ROOT = (import.meta as any)?.env?.VITE_API_ROOT ?? "http://localhost:8000";
-const TOKEN_KEY = "token" as const;
+const TOKEN_KEY = "user" as const;
 const PAGE_LIMIT = 50;
 
+// DOM 依存のない素直なヘッダ
 const authHeaders = (): Record<string, string> => {
   if (typeof window === "undefined") return {};
-  const t = localStorage.getItem(TOKEN_KEY) ?? sessionStorage.getItem(TOKEN_KEY);
-  return t ? { Authorization: `Bearer ${t}` } : {};
+
+  // localStorage か sessionStorage から取り出す
+  const raw = localStorage.getItem(TOKEN_KEY) ?? sessionStorage.getItem(TOKEN_KEY);
+  if (!raw) return {};
+
+  try {
+    // JSON文字列をオブジェクトに変換
+    const json_object = JSON.parse(raw);
+    const t = json_object.token;
+    return t ? { Authorization: `Bearer ${t}` } : {};
+  } catch (e) {
+    console.error("トークンのJSONパースに失敗しました:", e);
+    return {};
+  }
 };
+
 
 async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${API_ROOT}${path}`, {
